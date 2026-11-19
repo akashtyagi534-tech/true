@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   test-backend:
     runs-on: ubuntu-latest
@@ -17,11 +20,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Core Test Dependencies
+      - name: Install Test Dependencies
         working-directory: ./backend
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi sqlalchemy pydantic-settings httpx pytest
+          pip install -r requirements.txt
 
       - name: Run Pytest Suite
         working-directory: ./backend
@@ -37,7 +40,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -56,8 +59,22 @@ jobs:
           flutter pub get
           flutter build apk --release
 
+      - name: Publish Direct APK to GitHub Releases (No ZIP Needed)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp flutter_app/build/app/outputs/flutter-apk/app-release.apk TruthLensPro-release.apk
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest TruthLensPro-release.apk --clobber
+          else
+            gh release create latest TruthLensPro-release.apk \
+              --title "Truth Lens Pro (Latest Android APK)" \
+              --notes "Direct Android APK download — no ZIP extraction required."
+          fi
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: TruthVerify-Release-APK
-          path: flutter_app/build/app/outputs/flutter-apk/app-release.apk
+          path: TruthLensPro-release.apk
+          compression-level: 0

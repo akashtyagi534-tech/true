@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Forensic Session Report — Truth Lens Pro</title>
+<link rel="stylesheet" href="/static/style.css" />
+<style>
+  .bar { display: flex; align-items: flex-end; gap: 2px; height: 130px; margin: 16px 0; }
+  .bar div { flex: 1; background: #2b3440; border-radius: 2px 2px 0 0; min-height: 3px; }
+  .qblock { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+  .qblock h3 { margin: 0 0 6px; font-size: 16px; }
+  .wrow { display: grid; grid-template-columns: 56px 140px 1fr; gap: 10px; font-size: 13px; color: var(--muted); padding: 6px 0; border-bottom: 1px dashed rgba(255,255,255,0.05); }
+  .wrow b { color: var(--text); }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+  .reason-line { color: var(--mid); font-size: 12px; margin-top: 3px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+  .stat-box { background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .stat-box span { display: block; font-size: 11px; color: var(--muted); }
+  .stat-box b { font-size: 18px; }
+  .contra-item { background: #261416; border: 1px solid #592629; border-radius: 8px; padding: 10px 12px; margin-top: 8px; font-size: 13px; color: #ffb4ae; }
+  .clip-btn { padding: 3px 8px; font-size: 11px; background: var(--cyan); color: #05131c; border-radius: 5px; margin-left: 6px; }
+  #clip-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 99; }
+  #clip-modal .card { max-width: 520px; width: 92%; }
+  #clip-video { width: 100%; border-radius: 8px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div>
+      <h1 id="title">Loading…</h1>
+      <p class="sub" id="meta"></p>
+    </div>
+    <div class="row no-print">
+      <a href="/" class="ghost btn-link">New Session</a>
+      <a href="/history" class="ghost btn-link">History</a>
+      <button id="btn-read" class="ghost">🔊 Read Summary</button>
+      <button id="btn-json" class="ghost">Export JSON</button>
+      <button id="btn-pdf" class="primary">Download PDF</button>
+    </div>
+  </header>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span id="verdict-badge" class="badge"></span>
+      <span id="conf" class="badge"></span>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-box"><span>Overall Stress Index</span><b id="overall">--</b></div>
+      <div class="stat-box"><span>Stress Spikes (62+)</span><b id="spikes-cnt">--</b></div>
+      <div class="stat-box"><span>Avg / Baseline Pulse</span><b id="bpm-stat">--</b></div>
+      <div class="stat-box"><span>Face Coverage</span><b id="cov-stat">--</b></div>
+    </div>
+
+    <div class="bar" id="bar"></div>
+    <p class="sub">Red (62+) = High stress spike · Amber (45-61) = Hesitation · Green (&lt;45) = Natural baseline. Estimation only.</p>
+  </div>
+
+  <div id="contra-card" class="card hidden" style="margin-top:14px">
+    <h3 style="margin:0 0 6px;font-size:15px">Contradiction & Timeline Alerts</h3>
+    <div id="contra-list"></div>
+  </div>
+
+  <div class="card" style="margin-top:14px" id="detail"></div>
+</main>
+
+<div id="clip-modal" class="hidden no-print">
+  <div class="card">
+    <h3 style="margin:0 0 10px">Spike Clip Replay</h3>
+    <video id="clip-video" controls autoplay></video>
+    <button id="btn-close-clip" class="primary">Close</button>
+  </div>
+</div>
+
+<script type="module" src="/static/report.js"></script>
+</body>
+</html>
