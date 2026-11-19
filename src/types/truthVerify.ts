@@ -54,5 +54,6 @@ export interface RepoFile {
   language: string;
 }
 
-export type AppSection = 'lab' | 'files' | 'guide' | 'architecture';
+export type AppSection = 'admin' | 'files' | 'guide' | 'lab' | 'architecture';
 export type UiLanguage = 'hi' | 'en';
+export type ProjectBundle = 'v3' | 'mobile';

@@ -5,7 +5,8 @@ import JSZip from 'jszip';
 import {createServer as createViteServer} from 'vite';
 
 const PORT = 3000;
-const REPO_ROOT = path.resolve(process.cwd(), 'truth-verify-app');
+const MOBILE_REPO_ROOT = path.resolve(process.cwd(), 'truth-verify-app');
+const V3_REPO_ROOT = path.resolve(process.cwd(), 'truth-lens-v3-pro');
 
 interface RepoFile {
   path: string;
@@ -18,7 +19,11 @@ interface RepoFile {
 function detectLanguage(filePath: string): string {
   if (filePath.endsWith('.py')) return 'python';
   if (filePath.endsWith('.dart')) return 'dart';
+  if (filePath.endsWith('.html')) return 'html';
+  if (filePath.endsWith('.js')) return 'javascript';
+  if (filePath.endsWith('.css')) return 'css';
   if (filePath.endsWith('.yml') || filePath.endsWith('.yaml')) return 'yaml';
+  if (filePath.endsWith('.json')) return 'json';
   if (filePath.endsWith('Dockerfile')) return 'dockerfile';
   if (filePath.endsWith('.txt')) return 'text';
   return 'plaintext';
@@ -54,20 +59,26 @@ function collectRepoFiles(dir: string, prefix = ''): RepoFile[] {
 }
 
 function sanitizeBaseUrl(raw?: string): string {
-  const fallback = 'https://truth-verify-production.up.railway.app';
-  if (!raw || typeof raw !== 'string') return fallback;
+  if (!raw || typeof raw !== 'string') return '';
   const trimmed = raw.trim().replace(/\/+$/, '');
+  if (trimmed === 'https://truth-verify-production.up.railway.app') return '';
   if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
-    return fallback;
+    return '';
   }
   return trimmed;
 }
 
-function sanitizeRepoName(raw?: string): string {
-  const fallback = 'True-';
+function sanitizeRepoName(raw?: string, fallback = 'True-'): string {
   if (!raw || typeof raw !== 'string') return fallback;
   const cleaned = raw.trim().replace(/[^a-zA-Z0-9._-]/g, '');
   return cleaned || fallback;
+}
+
+function resolveBundle(raw?: string): {bundle: 'v3' | 'mobile'; rootDir: string; defaultRepo: string} {
+  if (raw === 'v3') {
+    return {bundle: 'v3', rootDir: V3_REPO_ROOT, defaultRepo: 'truth-lens-v3-pro'};
+  }
+  return {bundle: 'mobile', rootDir: MOBILE_REPO_ROOT, defaultRepo: 'True-'};
 }
 
 function applyRailwayUrl(files: RepoFile[], baseUrl: string): RepoFile[] {
@@ -94,10 +105,12 @@ async function startServer() {
 
   app.get('/api/project/files', (req, res) => {
     try {
+      const {bundle, rootDir, defaultRepo} = resolveBundle(req.query.bundle as string | undefined);
       const baseUrl = sanitizeBaseUrl(req.query.baseUrl as string | undefined);
-      const repoName = sanitizeRepoName(req.query.repoName as string | undefined);
-      const files = applyRailwayUrl(collectRepoFiles(REPO_ROOT), baseUrl);
+      const repoName = sanitizeRepoName(req.query.repoName as string | undefined, defaultRepo);
+      const files = applyRailwayUrl(collectRepoFiles(rootDir), baseUrl);
       res.json({
+        bundle,
         rootName: repoName,
         baseUrl,
         totalFiles: files.length,
@@ -110,9 +123,10 @@ async function startServer() {
 
   app.get('/api/project/download', async (req, res) => {
     try {
+      const {rootDir, defaultRepo} = resolveBundle(req.query.bundle as string | undefined);
       const baseUrl = sanitizeBaseUrl(req.query.baseUrl as string | undefined);
-      const repoName = sanitizeRepoName(req.query.repoName as string | undefined);
-      const files = applyRailwayUrl(collectRepoFiles(REPO_ROOT), baseUrl);
+      const repoName = sanitizeRepoName(req.query.repoName as string | undefined, defaultRepo);
+      const files = applyRailwayUrl(collectRepoFiles(rootDir), baseUrl);
 
       const zip = new JSZip();
       const rootFolder = zip.folder(repoName);
@@ -142,6 +156,14 @@ async function startServer() {
     const rawUrl = typeof req.body?.baseUrl === 'string' ? req.body.baseUrl.trim().replace(/\/+$/, '') : '';
     if (!rawUrl || (!rawUrl.startsWith('https://') && !rawUrl.startsWith('http://'))) {
       res.status(400).json({ok: false, error: 'Enter a valid http:// or https:// Railway URL.'});
+      return;
+    }
+    if (rawUrl.includes('railway.com/project/') || rawUrl.includes('railway.app/project/')) {
+      res.status(400).json({
+        ok: false,
+        error:
+          'Yeh Railway Dashboard ka private link hai. Apni backend service ke Settings -> Networking -> Generate Domain se mila public URL (https://....up.railway.app) dalein.',
+      });
       return;
     }
 
@@ -178,6 +200,86 @@ async function startServer() {
       });
     } finally {
       clearTimeout(timer);
+    }
+  });
+
+  app.post('/api/admin/proxy', async (req, res) => {
+    const rawBase = typeof req.body?.baseUrl === 'string' ? req.body.baseUrl.trim().replace(/\/+$/, '') : '';
+    const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint.trim() : '';
+    const method = typeof req.body?.method === 'string' ? req.body.method.toUpperCase() : 'GET';
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    const payload = req.body?.body;
+
+    if (!rawBase || (!rawBase.startsWith('https://') && !rawBase.startsWith('http://'))) {
+      res.status(400).json({error: 'Valid Railway backend URL (https://....up.railway.app) required.'});
+      return;
+    }
+    if (rawBase.includes('railway.com/project/') || rawBase.includes('railway.app/project/')) {
+      res.status(400).json({
+        error:
+          'Yeh Railway Dashboard ka private link hai. Backend service → Settings → Networking → Generate Domain se mila https://....up.railway.app URL dalein.',
+      });
+      return;
+    }
+    if (!endpoint.startsWith('/api/') && endpoint !== '/health') {
+      res.status(400).json({error: 'Invalid admin endpoint.'});
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (method !== 'GET' && payload !== undefined) {
+        headers['Content-Type'] = 'application/json';
+      }
+      const upstream = await fetch(`${rawBase}${endpoint}`, {
+        method,
+        headers,
+        body: method !== 'GET' && payload !== undefined ? JSON.stringify(payload) : undefined,
+        signal: controller.signal,
+      });
+      const text = await upstream.text();
+      let data: unknown = {detail: text};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        // leave wrapped text
+      }
+      res.status(upstream.status).json(data);
+    } catch (err) {
+      res.status(502).json({
+        error: err instanceof Error ? err.message : 'Could not reach Railway backend.',
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  app.get('/api/admin/video-proxy', async (req, res) => {
+    const rawBase = typeof req.query.baseUrl === 'string' ? req.query.baseUrl.trim().replace(/\/+$/, '') : '';
+    const videoPath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+    if (
+      !rawBase ||
+      (!rawBase.startsWith('https://') && !rawBase.startsWith('http://')) ||
+      !videoPath.startsWith('/api/admin/videos/')
+    ) {
+      res.status(400).send('Invalid video proxy request');
+      return;
+    }
+    try {
+      const upstream = await fetch(`${rawBase}${videoPath}`);
+      if (!upstream.ok) {
+        res.status(upstream.status).send('Video unavailable');
+        return;
+      }
+      const contentType = upstream.headers.get('content-type') || 'video/mp4';
+      const arrayBuf = await upstream.arrayBuffer();
+      res.setHeader('Content-Type', contentType);
+      res.send(Buffer.from(arrayBuf));
+    } catch {
+      res.status(502).send('Failed to stream video');
     }
   });
 

@@ -1,24 +1,23 @@
 import {useEffect, useState} from 'react';
+import {AdminPanelView} from './components/AdminPanelView';
 import {ArchitectureView} from './components/ArchitectureView';
 import {DeployGuideView} from './components/DeployGuideView';
 import {LiveSignalLab} from './components/LiveSignalLab';
 import {ProjectFilesStudio} from './components/ProjectFilesStudio';
 import {TopBar} from './components/TopBar';
-import type {AppSection, RepoFile, UiLanguage} from './types/truthVerify';
+import type {AppSection, ProjectBundle, RepoFile, UiLanguage} from './types/truthVerify';
 
-const DEFAULT_RAILWAY_URL = 'https://truth-verify-production.up.railway.app';
-const DEFAULT_REPO_NAME = 'True-';
 const DEFAULT_GITHUB_USER = 'akashtyagi534-tech';
 
 export default function App() {
-  const [activeSection, setActiveSection] = useState<AppSection>('guide');
+  const [activeSection, setActiveSection] = useState<AppSection>('admin');
   const [language, setLanguage] = useState<UiLanguage>('hi');
+  const [bundle, setBundle] = useState<ProjectBundle>('mobile');
   const [repoName, setRepoName] = useState<string>(() => {
     try {
-      const saved = localStorage.getItem('truthverify_repo_name');
-      return !saved || saved === 'true' ? DEFAULT_REPO_NAME : saved;
+      return localStorage.getItem('truthverify_repo_name') || 'True-';
     } catch {
-      return DEFAULT_REPO_NAME;
+      return 'True-';
     }
   });
   const [githubUsername, setGithubUsername] = useState<string>(() => {
@@ -30,14 +29,17 @@ export default function App() {
   });
   const [railwayUrl, setRailwayUrl] = useState<string>(() => {
     try {
-      return localStorage.getItem('truthverify_railway_url') || DEFAULT_RAILWAY_URL;
+      const saved = localStorage.getItem('truthverify_railway_url') || '';
+      return saved === 'https://truth-verify-production.up.railway.app' ? '' : saved;
     } catch {
-      return DEFAULT_RAILWAY_URL;
+      return '';
     }
   });
   const [files, setFiles] = useState<RepoFile[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [isDownloading, setIsDownloading] = useState(false);
+
+  const effectiveZipName = bundle === 'v3' ? 'truth-lens-v3-pro' : repoName;
 
   useEffect(() => {
     try {
@@ -56,7 +58,11 @@ export default function App() {
     async function loadRepoFiles() {
       setIsLoadingFiles(true);
       try {
-        const params = new URLSearchParams({baseUrl: railwayUrl, repoName});
+        const params = new URLSearchParams({
+          bundle,
+          baseUrl: railwayUrl,
+          repoName: effectiveZipName,
+        });
         const resp = await fetch(`/api/project/files?${params.toString()}`, {
           signal: controller.signal,
         });
@@ -76,19 +82,23 @@ export default function App() {
       }
     }
 
-    const timer = window.setTimeout(loadRepoFiles, 180);
+    const timer = window.setTimeout(loadRepoFiles, 150);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [railwayUrl, repoName]);
+  }, [railwayUrl, effectiveZipName, bundle]);
 
   const handleDownloadZip = async () => {
     setIsDownloading(true);
     try {
-      const cleanRepo = repoName.trim().replace(/[^a-zA-Z0-9._-]/g, '') || DEFAULT_REPO_NAME;
-      const params = new URLSearchParams({baseUrl: railwayUrl, repoName: cleanRepo});
+      const cleanRepo = effectiveZipName.trim().replace(/[^a-zA-Z0-9._-]/g, '') || 'truth-lens-v3-pro';
+      const params = new URLSearchParams({
+        bundle,
+        baseUrl: railwayUrl,
+        repoName: cleanRepo,
+      });
       const resp = await fetch(`/api/project/download?${params.toString()}`);
       if (!resp.ok) throw new Error('ZIP export failed');
       const blob = await resp.blob();
@@ -117,6 +127,17 @@ export default function App() {
       />
 
       <main>
+        {activeSection === 'admin' && (
+          <AdminPanelView
+            railwayUrl={railwayUrl}
+            onChangeRailwayUrl={setRailwayUrl}
+            onOpenFiles={() => setActiveSection('files')}
+            onOpenGuide={() => setActiveSection('guide')}
+            language={language}
+            onChangeLanguage={setLanguage}
+          />
+        )}
+
         {activeSection === 'lab' && (
           <LiveSignalLab
             railwayUrl={railwayUrl}
@@ -129,7 +150,9 @@ export default function App() {
           <ProjectFilesStudio
             files={files}
             isLoading={isLoadingFiles}
-            repoName={repoName}
+            bundle={bundle}
+            onChangeBundle={setBundle}
+            repoName={effectiveZipName}
             railwayUrl={railwayUrl}
             onChangeRailwayUrl={setRailwayUrl}
             onDownloadZip={handleDownloadZip}
@@ -141,6 +164,8 @@ export default function App() {
 
         {activeSection === 'guide' && (
           <DeployGuideView
+            bundle={bundle}
+            onChangeBundle={setBundle}
             repoName={repoName}
             onChangeRepoName={setRepoName}
             githubUsername={githubUsername}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Session History — Truth Lens Pro</title>
+<link rel="stylesheet" href="/static/style.css" />
+<style>
+  .h-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .h-item:last-child { border-bottom: none; }
+  .h-title { font-size: 16px; font-weight: 700; margin: 0 0 4px; }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div>
+      <h1>Session History</h1>
+      <p class="sub">Purane saare sessions aur unki forensic reports.</p>
+    </div>
+    <a href="/" class="primary btn-link">+ New Session</a>
+  </header>
+  <div class="card" id="list">Loading…</div>
+</main>
+<script type="module" src="/static/history.js"></script>
+</body>
+</html>

@@ -7,41 +7,82 @@ class ReportScreen extends StatelessWidget {
   final VerificationReport report;
 
   Color _statusColor() {
-    if (report.consistencyIndex >= 72) return const Color(0xFF16A34A);
-    if (report.consistencyIndex >= 45) return const Color(0xFFD97706);
-    return const Color(0xFFDC2626);
+    if (report.consistencyIndex >= 72) return const Color(0xFF22C55E);
+    if (report.consistencyIndex >= 45) return const Color(0xFFF59E0B);
+    return const Color(0xFFEF4444);
   }
 
   @override
   Widget build(BuildContext context) {
     final accent = _statusColor();
     return Scaffold(
-      appBar: AppBar(title: const Text('Signal Verification Report')),
+      appBar: AppBar(title: const Text('Truth Lens Report')),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          if (report.fallbackNotice != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.14),
+                border: Border.all(color: Colors.amber.shade700),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                report.fallbackNotice!,
+                style: const TextStyle(fontSize: 12, color: Colors.amberAccent),
+              ),
+            ),
+          if (report.flagged)
+            Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.16),
+                border: Border.all(color: Colors.redAccent),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Safety Alert: Unsafe question keyword detected & logged for Admin review.',
+                style: TextStyle(fontSize: 12, color: Colors.redAccent, fontWeight: FontWeight.w600),
+              ),
+            ),
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: Colors.white24),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (report.question.isNotEmpty) ...[
+                  Text(
+                    'Q: ${report.question}',
+                    style: const TextStyle(fontSize: 13, color: Colors.white70),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 Text(
                   report.classification,
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: accent),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Consistency Index: ${report.consistencyIndex.toStringAsFixed(1)} / 100',
+                  'Consistency: ${report.consistencyIndex.toStringAsFixed(1)} / 100',
                   style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
+                if (report.verdictHi.isNotEmpty)
+                  Text(
+                    report.verdictHi,
+                    style: const TextStyle(fontSize: 14, color: Colors.white),
+                  ),
+                const SizedBox(height: 6),
                 Text(
-                  'Combined Stress: ${report.combinedStressIndex.toStringAsFixed(1)}% · Confidence: ${report.confidence}',
-                  style: TextStyle(color: Colors.grey.shade700),
+                  'Stress: ${report.combinedStressIndex.toStringAsFixed(1)}% · Mode: ${report.confidence}',
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
                 ),
               ],
             ),
@@ -66,7 +107,7 @@ class ReportScreen extends StatelessWidget {
           const SizedBox(height: 16),
           Text(
             report.disclaimer,
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: const TextStyle(fontSize: 12, color: Colors.white54),
           ),
         ],
       ),
@@ -84,8 +125,8 @@ class _MetricRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Colors.white12)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,

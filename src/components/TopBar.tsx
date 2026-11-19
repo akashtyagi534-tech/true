@@ -9,9 +9,10 @@ interface TopBarProps {
 }
 
 const NAV_ITEMS: Array<{id: AppSection; label: string}> = [
-  {id: 'lab', label: 'Live Lab'},
+  {id: 'admin', label: 'Admin Panel'},
   {id: 'files', label: 'Project Files'},
   {id: 'guide', label: 'Deploy Guide'},
+  {id: 'lab', label: 'Live Lab'},
   {id: 'architecture', label: 'Architecture'},
 ];
 

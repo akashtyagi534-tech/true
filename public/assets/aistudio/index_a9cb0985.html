@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Truth Lens Pro — AI Polygraph</title>
+<link rel="stylesheet" href="/static/style.css" />
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div>
+      <h1>Truth Lens <span class="pro-tag">PRO v3</span></h1>
+      <p class="sub">AI Face, Voice, Pulse & Hindi Voice Analyst · Pehle 3 sawaal FREE</p>
+    </div>
+    <div id="user-bar" class="wallet-bar hidden">
+      <span id="pill-free" class="free-pill">Free: 3</span>
+      <span id="pill-wallet" class="wallet-pill">₹0</span>
+      <button id="btn-open-recharge" class="primary" style="padding:7px 12px;font-size:13px">+ Recharge</button>
+      <a id="link-admin" href="/admin" class="ghost btn-link hidden" style="padding:7px 12px;font-size:13px">Admin</a>
+      <a href="/history" class="ghost btn-link" style="padding:7px 12px;font-size:13px">History</a>
+      <button id="btn-logout" class="ghost danger-ghost" style="padding:7px 12px;font-size:13px">Logout</button>
+    </div>
+  </header>
+
+  <!-- STAGE 0: LOGIN -->
+  <section id="stage-auth" class="card" style="max-width:460px;margin:40px auto">
+    <h2 style="margin:0 0 6px">Sign in to Truth Lens</h2>
+    <p class="sub" style="margin-bottom:18px">Google se login karo — pehle <b id="auth-free-cnt">3</b> sawaal bilkul free, uske baad ₹<b id="auth-price">10</b>/sawaal.</p>
+
+    <div id="google-btn-wrap" style="margin-bottom:14px"></div>
+
+    <div id="dev-login-box" class="hidden">
+      <p class="sub" style="margin-bottom:10px">Quick Email Login (Google Client ID set hote hi Google button aa jayega):</p>
+      <label class="field"><span>Email</span><input id="dev-email" type="email" placeholder="you@gmail.com" /></label>
+      <label class="field"><span>Name</span><input id="dev-name" type="text" placeholder="Your Name" /></label>
+      <label class="field"><span>Admin Password (optional, only for Admin)</span><input id="dev-pass" type="password" placeholder="Leave blank for normal user" /></label>
+      <button id="btn-dev-login" class="primary" style="width:100%">Continue</button>
+    </div>
+    <p id="auth-error" class="error hidden"></p>
+  </section>
+
+  <!-- STAGE 1: SETUP -->
+  <section id="stage-setup" class="card hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0;font-size:18px">Naya Session Shuru Karo</h2>
+      <span id="cost-preview" class="pill ok">Cost: FREE</span>
+    </div>
+    <label class="field">
+      <span>Session title</span>
+      <input id="title" type="text" placeholder="Interview / Verification / Practice" />
+    </label>
+    <label class="field">
+      <span>Questions (one per line)</span>
+      <textarea id="questions" rows="5" placeholder="Tum kal shaam 6 baje kahan the?&#10;Tumne woh file kisko bheji thi?&#10;Kya tum kuch chhupa rahe ho?"></textarea>
+    </label>
+    <div class="row wrap-row">
+      <label class="toggle">
+        <input id="opt-voice" type="checkbox" checked />
+        <span>AI Voice Verdict ON (Hindi mein bolke batayega)</span>
+      </label>
+      <label class="toggle">
+        <input id="opt-clips" type="checkbox" checked />
+        <span>Spike Video Clips Save (Browser-only)</span>
+      </label>
+    </div>
+    <button id="btn-start" class="primary" style="margin-top:16px">Camera + Mic Start Karo</button>
+    <p id="setup-error" class="error hidden"></p>
+  </section>
+
+  <!-- STAGE 2: LIVE -->
+  <section id="stage-live" class="hidden">
+    <div class="env-strip">
+      <span id="env-light" class="pill">Light: --</span>
+      <span id="env-face" class="pill">Face: --</span>
+      <span id="env-bpm" class="pill">Pulse: -- BPM</span>
+      <span id="env-lat" class="pill">Latency: --</span>
+      <button id="btn-mute" class="pill pill-btn">🔊 Voice ON</button>
+    </div>
+
+    <div class="live-grid">
+      <div class="video-wrap">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div id="banner" class="banner">Baseline chalu — natural jawab do</div>
+        <div id="meter" class="meter">
+          <div class="meter-bar"><div id="meter-fill"></div></div>
+          <div class="meter-meta">
+            <span id="meter-score">--</span>
+            <span id="meter-conf">conf --</span>
+            <span id="meter-cov">face --</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="side-hud">
+        <div class="card mini-card">
+          <div class="card-head">
+            <span>Live Polygraph</span>
+            <span class="legend">
+              <i style="color:var(--bad)">●</i> Stress
+              <i style="color:var(--mid)">●</i> Voice
+              <i style="color:var(--cyan)">●</i> Pulse
+            </span>
+          </div>
+          <canvas id="polygraph" width="320" height="120"></canvas>
+        </div>
+
+        <div class="card mini-card">
+          <div class="card-head"><span>Deception Radar</span></div>
+          <div class="radar-list">
+            <div class="r-row"><span>Eyes & Gaze</span><div class="r-bar"><div id="r-eyes"></div></div></div>
+            <div class="r-row"><span>Micro-Face</span><div class="r-bar"><div id="r-face"></div></div></div>
+            <div class="r-row"><span>Voice Stress</span><div class="r-bar"><div id="r-voice"></div></div></div>
+            <div class="r-row"><span>Word Honesty</span><div class="r-bar"><div id="r-words"></div></div></div>
+            <div class="r-row"><span>Bio (BPM/Lag)</span><div class="r-bar"><div id="r-bio"></div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="verdict-box" class="verdict-box hidden">
+      <div class="verdict-title">AI Live Verdict</div>
+      <p id="verdict-text" class="verdict-text"></p>
+      <div id="followup-wrap" class="followup-wrap hidden">
+        <span class="followup-label">Suggested Cross-Question:</span>
+        <span id="followup-text"></span>
+        <button id="btn-ask-followup" class="small-btn">Ye Sawaal Poocho</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <p id="question" class="question">Baseline…</p>
+      <p id="live-signals" class="signals"></p>
+      <p id="transcript" class="transcript"></p>
+      <div class="row">
+        <button id="btn-next" class="primary" disabled>Agla Sawaal</button>
+        <button id="btn-speak-q" class="ghost" disabled>Sawaal Bolke Sunao</button>
+        <button id="btn-finish" class="ghost danger-ghost">Session Khatam</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- RECHARGE MODAL -->
+<div id="recharge-modal" class="modal-backdrop hidden">
+  <div class="card modal-card">
+    <h3 style="margin:0 0 6px">Wallet Recharge</h3>
+    <p class="sub" style="margin-bottom:12px">Minimum recharge: <b>₹<span id="m-min-rec">50</span></b> · UPI ID: <b id="m-upi" style="color:var(--cyan)">--</b></p>
+    <label class="field">
+      <span>Amount (₹)</span>
+      <input id="rec-amount" type="number" min="50" value="50" />
+    </label>
+    <label class="field">
+      <span>UPI Reference / UTR Number (Pay karne ke baad daalein)</span>
+      <input id="rec-utr" type="text" placeholder="e.g. 428193847261" />
+    </label>
+    <div class="row">
+      <button id="btn-submit-recharge" class="primary">Submit Recharge</button>
+      <button id="btn-close-recharge" class="ghost">Cancel</button>
+    </div>
+    <p id="rec-msg" class="hidden"></p>
+  </div>
+</div>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

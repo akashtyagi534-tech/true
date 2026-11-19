@@ -136,7 +136,7 @@ export function ArchitectureView({
           <dl className="mt-5 divide-y divide-slate-100 border-t border-slate-200 text-xs">
             <div className="flex justify-between py-2.5">
               <dt className="text-slate-500">Runner</dt>
-              <dd className="font-mono text-slate-900">ubuntu-latest · JDK 17</dd>
+              <dd className="font-mono text-slate-900">ubuntu-latest · JDK 21</dd>
             </div>
             <div className="flex justify-between py-2.5">
               <dt className="text-slate-500">Artifact Name</dt>
