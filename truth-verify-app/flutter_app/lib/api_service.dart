@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 
 class UserProfile {
   UserProfile({
@@ -118,13 +118,43 @@ class ApiService {
     return trimmed;
   }
 
+  Future<File> _prefsFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/truth_lens_prefs.json');
+  }
+
+  Future<Map<String, dynamic>> _readPrefs() async {
+    try {
+      final file = await _prefsFile();
+      if (await file.exists()) {
+        final raw = await file.readAsString();
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+      }
+    } catch (_) {
+      // ignore read errors
+    }
+    return <String, dynamic>{};
+  }
+
+  Future<void> _writePrefs(Map<String, dynamic> data) async {
+    try {
+      final file = await _prefsFile();
+      await file.writeAsString(jsonEncode(data));
+    } catch (_) {
+      // ignore write errors
+    }
+  }
+
   Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedUrl = prefs.getString(_urlPrefKey);
+    final prefs = await _readPrefs();
+    final savedUrl = prefs[_urlPrefKey] as String?;
     if (savedUrl != null && savedUrl.trim().isNotEmpty) {
       baseUrl = normalizeUrl(savedUrl);
     }
-    authToken = prefs.getString(_tokenPrefKey) ?? '';
+    authToken = (prefs[_tokenPrefKey] as String?) ?? '';
     if (baseUrl.isNotEmpty) {
       await fetchPublicConfig();
       if (authToken.isNotEmpty) {
@@ -135,8 +165,9 @@ class ApiService {
 
   Future<void> saveUrl(String url) async {
     baseUrl = normalizeUrl(url);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_urlPrefKey, baseUrl);
+    final prefs = await _readPrefs();
+    prefs[_urlPrefKey] = baseUrl;
+    await _writePrefs(prefs);
     if (baseUrl.isNotEmpty) {
       await fetchPublicConfig();
     }
@@ -144,15 +175,17 @@ class ApiService {
 
   Future<void> saveToken(String token) async {
     authToken = token;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_tokenPrefKey, token);
+    final prefs = await _readPrefs();
+    prefs[_tokenPrefKey] = token;
+    await _writePrefs(prefs);
   }
 
   Future<void> logout() async {
     authToken = '';
     currentUser = null;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_tokenPrefKey);
+    final prefs = await _readPrefs();
+    prefs.remove(_tokenPrefKey);
+    await _writePrefs(prefs);
   }
 
   Map<String, String> _headers() {
@@ -432,24 +465,26 @@ class ApiService {
     final chunkMeans = <double>[];
     for (int offset = 0; offset < bytes.length; offset += chunkSize) {
       final end = min(bytes.length, offset + chunkSize);
-      double sum = 0;
+      double sum = 0.0;
       for (int i = offset; i < end; i += 4) {
         sum += bytes[i];
       }
-      chunkMeans.add(sum / max(1, (end - offset) / 4));
+      final double denom = max(1.0, (end - offset) / 4.0);
+      chunkMeans.add(sum / denom);
     }
-    final meanVal = chunkMeans.isEmpty
+    final double meanVal = chunkMeans.isEmpty
         ? 128.0
         : chunkMeans.reduce((a, b) => a + b) / chunkMeans.length;
-    final variance = chunkMeans.isEmpty
+    final double variance = chunkMeans.isEmpty
         ? 10.0
-        : chunkMeans.map((v) => pow(v - meanVal, 2)).reduce((a, b) => a + b) / chunkMeans.length;
-    final stdDev = sqrt(variance);
+        : chunkMeans.map<double>((v) => (v - meanVal) * (v - meanVal)).reduce((a, b) => a + b) /
+            chunkMeans.length;
+    final double stdDev = sqrt(variance);
 
-    final visualStress = min(78.0, max(12.0, (stdDev * 1.4) + (kbPerSec > 450 ? 12.0 : 4.0)));
-    final vocalStress = min(75.0, max(14.0, (stdDev * 1.2) + (safeDuration < 3 ? 16.0 : 8.0)));
-    final combinedStress = double.parse(((0.45 * visualStress) + (0.55 * vocalStress)).toStringAsFixed(1));
-    final consistency = double.parse((100.0 - combinedStress).clamp(0.0, 100.0).toStringAsFixed(1));
+    final double visualStress = min(78.0, max(12.0, (stdDev * 1.4) + (kbPerSec > 450 ? 12.0 : 4.0)));
+    final double vocalStress = min(75.0, max(14.0, (stdDev * 1.2) + (safeDuration < 3 ? 16.0 : 8.0)));
+    final double combinedStress = double.parse(((0.45 * visualStress) + (0.55 * vocalStress)).toStringAsFixed(1));
+    final double consistency = double.parse((100.0 - combinedStress).clamp(0.0, 100.0).toDouble().toStringAsFixed(1));
 
     String classification;
     String verdictHi;

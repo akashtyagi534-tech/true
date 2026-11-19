@@ -28,7 +28,7 @@ jobs:
 
       - name: Run Pytest Suite
         working-directory: ./backend
-        run: pytest -v
+        run: python -m pytest -v
 
   build-apk:
     runs-on: ubuntu-latest
@@ -53,11 +53,13 @@ jobs:
           flutter create . --platforms=android
           sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.CAMERA"\/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <application/' android/app/src/main/AndroidManifest.xml
 
-      - name: Get Dependencies & Build APK
+      - name: Get Flutter Dependencies
         working-directory: ./flutter_app
-        run: |
-          flutter pub get
-          flutter build apk --release
+        run: flutter pub get
+
+      - name: Build Release APK
+        working-directory: ./flutter_app
+        run: flutter build apk --release
 
       - name: Publish Direct APK to GitHub Releases (No ZIP Needed)
         env:

@@ -25,7 +25,7 @@ class ReportScreen extends StatelessWidget {
               margin: const EdgeInsets.only(bottom: 14),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.amber.withValues(alpha: 0.14),
+                color: const Color(0x24FFC107),
                 border: Border.all(color: Colors.amber.shade700),
                 borderRadius: BorderRadius.circular(10),
               ),
@@ -39,7 +39,7 @@ class ReportScreen extends StatelessWidget {
               margin: const EdgeInsets.only(bottom: 14),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.red.withValues(alpha: 0.16),
+                color: const Color(0x29EF4444),
                 border: Border.all(color: Colors.redAccent),
                 borderRadius: BorderRadius.circular(10),
               ),
