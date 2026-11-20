@@ -404,12 +404,18 @@ def auth_dev(payload: DevLoginIn, db: DbSession = Depends(get_db)) -> dict:
     if not email_low or "@" not in email_low:
         raise HTTPException(status_code=400, detail="Valid email required")
 
-    if settings.google_client_id:
-        if email_low not in settings.admin_email_set or payload.password != settings.admin_password:
-            raise HTTPException(status_code=403, detail="Use Google Sign-In")
+    is_admin_email = email_low in settings.admin_email_set
+    if is_admin_email:
+        if payload.password != settings.admin_password:
+            raise HTTPException(
+                status_code=403,
+                detail="Galat Admin Password! Admin login ke liye sahi Admin Password dalein.",
+            )
 
     user = upsert_user(db, email=email_low, name=payload.name or email_low.split("@")[0])
-    if payload.password and payload.password == settings.admin_password and email_low in settings.admin_email_set:
+    if user.is_banned:
+        raise HTTPException(status_code=403, detail="Account suspended by Admin")
+    if is_admin_email and payload.password == settings.admin_password:
         user.is_admin = True
         db.commit()
     token = sign_token({"uid": user.id, "email": user.email, "admin": user.is_admin})

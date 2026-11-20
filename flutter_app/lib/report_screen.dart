@@ -179,8 +179,8 @@ class _ReportScreenState extends State<ReportScreen> {
   }
 
   Color _scoreColor(double score) {
-    if (score >= 72) return TruthLensColors.neonEmerald;
-    if (score >= 45) return TruthLensColors.neonAmber;
+    if (score >= 65) return TruthLensColors.neonEmerald;
+    if (score >= 42) return TruthLensColors.neonAmber;
     return TruthLensColors.neonRose;
   }
 

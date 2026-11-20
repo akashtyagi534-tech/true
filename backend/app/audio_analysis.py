@@ -108,21 +108,21 @@ def analyze_audio(audio_path: str, question: str = "", transcript_hint: str = ""
     env_freqs = np.fft.rfftfreq(len(env), d=1.0 / frame_rate)
     tremor_mask = (env_freqs >= 8.0) & (env_freqs <= 12.0)
     total_power = float(np.sum(fft_env) + 1e-6)
-    micro_tremor_index = round(
-        min(100.0, (float(np.sum(fft_env[tremor_mask])) / total_power) * 320.0), 1
-    ) if np.any(tremor_mask) else 12.0
+    tremor_ratio = float(np.sum(fft_env[tremor_mask])) / total_power if np.any(tremor_mask) else 0.08
+    micro_tremor_index = round(min(100.0, max(0.0, (tremor_ratio - 0.085) * 240.0)), 1)
 
     # 18. Formant Frequency Shift proxy (Spectral Centroid & Bandwidth F1/F2 constriction)
     centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=hop_length)[0]
     voiced_cent = centroid[rms > silence_threshold]
     formant_center_hz = round(float(np.mean(voiced_cent)), 1) if len(voiced_cent) > 0 else 1450.0
-    formant_shift_index = round(min(100.0, (float(np.std(voiced_cent)) / max(formant_center_hz, 400.0)) * 220.0), 1) if len(voiced_cent) > 2 else 15.0
+    cent_cv = float(np.std(voiced_cent)) / max(formant_center_hz, 400.0) if len(voiced_cent) > 2 else 0.22
+    formant_shift_index = round(min(100.0, max(0.0, (cent_cv - 0.22) * 180.0)), 1)
 
     # 19. Breathing Pattern & Sharp Inhalations (low-energy high-ZCR bursts before speech)
     zcr = librosa.feature.zero_crossing_rate(y=y, hop_length=hop_length)[0]
     breath_frames = (rms > silence_threshold * 0.45) & (rms < rms_mean * 0.95) & (zcr > 0.14)
     sharp_inhalations = int(np.sum(np.diff(breath_frames.astype(int)) == 1))
-    breathing_irregularity = round(min(100.0, sharp_inhalations * 14.0 + max(0.0, pause_ratio - 30.0)), 1)
+    breathing_irregularity = round(min(100.0, max(0.0, (sharp_inhalations - 1) * 12.0) + max(0.0, pause_ratio - 35.0)), 1)
 
     # 20. Speech Rate Acceleration / Deceleration (syllable onsets per second)
     onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
@@ -131,9 +131,9 @@ def analyze_audio(audio_path: str, question: str = "", transcript_hint: str = ""
     speech_rate_wps = round((len(onsets) / 1.65) / active_sec, 2)
     if len(onsets) > 4:
         ioi = np.diff(onsets)
-        speech_rate_variance = round(min(100.0, float(np.std(ioi) / (np.mean(ioi) + 1e-4)) * 65.0), 1)
+        speech_rate_variance = round(min(100.0, float(np.std(ioi) / (np.mean(ioi) + 1e-4)) * 55.0), 1)
     else:
-        speech_rate_variance = 15.0
+        speech_rate_variance = 14.0
 
     # 21. Transcript & Linguistic cues (optional Faster-Whisper + hint)
     transcript = (transcript_hint or "").strip() or _transcribe_if_enabled(audio_path)
@@ -149,19 +149,23 @@ def analyze_audio(audio_path: str, question: str = "", transcript_hint: str = ""
     human_voice_pct = round(max(15.0, min(99.0, 91.0 + breath_bonus - flatness_penalty - robotic_penalty)), 1)
     voice_clone_risk_pct = round(100.0 - human_voice_pct, 1)
 
-    # Vocal stress composite
-    pitch_instability = min(100.0, (pitch_std / max(pitch_mean, 120.0)) * 220.0) if pitch_mean > 0 else 20.0
-    pause_anomaly = min(100.0, max(0.0, (pause_ratio - 22.0) * 1.8))
-    energy_volatility = min(100.0, energy_spike_rate * 4.2)
+    # Vocal stress composite (calibrated for natural conversational speech baselines)
+    pitch_cv = (pitch_std / max(pitch_mean, 120.0)) if pitch_mean > 0 else 0.14
+    pitch_instability = min(100.0, max(0.0, (pitch_cv - 0.14) * 210.0))
+    pause_anomaly = min(100.0, max(0.0, (pause_ratio - 32.0) * 1.6))
+    energy_volatility = min(100.0, max(0.0, (energy_spike_rate - 7.0) * 3.5))
 
     vocal_stress = round(
         min(
             100.0,
-            0.28 * pitch_instability
-            + 0.20 * micro_tremor_index
-            + 0.18 * energy_volatility
-            + 0.18 * pause_anomaly
-            + 0.16 * formant_shift_index,
+            max(
+                8.0,
+                0.28 * pitch_instability
+                + 0.20 * micro_tremor_index
+                + 0.18 * energy_volatility
+                + 0.18 * pause_anomaly
+                + 0.16 * formant_shift_index,
+            ),
         ),
         1,
     )

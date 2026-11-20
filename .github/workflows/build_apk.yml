@@ -51,7 +51,7 @@ jobs:
         working-directory: ./flutter_app
         run: |
           cp android/app/src/main/AndroidManifest.xml /tmp/custom_AndroidManifest.xml || true
-          flutter create . --platforms=android
+          flutter create . --platforms=android --org com.truthlens
           if [ -f /tmp/custom_AndroidManifest.xml ]; then
             cp /tmp/custom_AndroidManifest.xml android/app/src/main/AndroidManifest.xml
           fi
@@ -68,17 +68,41 @@ jobs:
         working-directory: ./flutter_app
         run: flutter build apk --release
 
-      - name: Publish Direct APK to GitHub Releases (No ZIP Needed)
+      - name: Extract APK Signing SHA-1 & Publish Direct APK to GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cp flutter_app/build/app/outputs/flutter-apk/app-release.apk TruthLensPro-release.apk
+          APK_SHA1=$(keytool -printcert -jarfile TruthLensPro-release.apk | grep -i "SHA1:" | head -n 1 | awk '{print $2}')
+          echo "Package Name: com.truthlens.truth_verify_app"
+          echo "APK SHA-1: ${APK_SHA1}"
+          {
+            echo "### Truth Lens Pro Android APK Built"
+            echo "- **Package Name:** \`com.truthlens.truth_verify_app\`"
+            echo "- **APK SHA-1 (for Google Sign-In OAuth Android Client ID):** \`${APK_SHA1}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          RELEASE_NOTES=$(cat <<EOF
+          Direct Android APK download — Truth Lens Pro v4.2:
+          - Calibrated Truth/Stress Engine (calm truthful speakers score 72–88% Consistent!)
+          - Automatic Hindi/Hinglish TTS Voice Verdict (Android 11+ queries)
+          - Instant Email & Admin Login + Google Sign-In
+          - Complete 22-Point Forensic Suite, Flashlight, Live Audio Waveform & Session History
+
+          ### Google Sign-In Android Setup (Fix Error 10)
+          In Google Cloud Console (Project \`1080598305429\`) → **APIs & Services → Credentials → Create OAuth Client ID → Android**:
+          - **Package name:** \`com.truthlens.truth_verify_app\`
+          - **SHA-1 certificate fingerprint:** \`${APK_SHA1}\`
+          EOF
+          )
+
           if gh release view latest >/dev/null 2>&1; then
             gh release upload latest TruthLensPro-release.apk --clobber
+            gh release edit latest --title "Truth Lens Pro v4.2 (Latest Android APK)" --notes "$RELEASE_NOTES"
           else
             gh release create latest TruthLensPro-release.apk \
-              --title "Truth Lens Pro v4.1 (Latest Android APK)" \
-              --notes "Direct Android APK download — Automatic TTS Voice Verdict (Android 11+ queries), Google Sign-In + SharedPreferences, 22-Point Forensic Suite, Dual Mode, Session History & Admin Panel."
+              --title "Truth Lens Pro v4.2 (Latest Android APK)" \
+              --notes "$RELEASE_NOTES"
           fi
 
       - name: Upload APK Artifact

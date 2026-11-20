@@ -460,7 +460,7 @@ def generate_ai_interrogation_coach(
         targeted.append("Baseline ke hisaab se response kaafi steady tha — ek confirmation detail poochh kar verify karein.")
 
     return {
-        "cognitive_load_level": "HIGH" if consistency_index < 45 else "MODERATE" if consistency_index < 72 else "LOW",
+        "cognitive_load_level": "HIGH" if consistency_index < 42 else "MODERATE" if consistency_index < 65 else "LOW",
         "top_stress_channels": top_names,
         "reverse_chronological_test": reverse_prompt,
         "unexpected_detail_shift": detail_prompt,
@@ -486,13 +486,15 @@ def compute_truth_score(
     delta_penalty = 0.0
     if baseline_video:
         bpm_jump = max(0.0, float(video_metrics.get("rppg_bpm", 74.0)) - float(baseline_video.get("rppg_bpm", 74.0)))
-        blink_jump = abs(float(video_metrics.get("blink_rate_per_min", 16.0)) - float(baseline_video.get("blink_rate_per_min", 16.0)))
-        delta_penalty += min(18.0, bpm_jump * 0.7 + blink_jump * 0.4)
+        blink_jump = max(0.0, abs(float(video_metrics.get("blink_rate_per_min", 16.0)) - float(baseline_video.get("blink_rate_per_min", 16.0))) - 4.0)
+        delta_penalty += min(18.0, bpm_jump * 0.65 + blink_jump * 0.35)
     if baseline_audio and audio_available:
-        lat_jump = max(0.0, float(audio_metrics.get("response_latency_ms", 0.0)) - float(baseline_audio.get("response_latency_ms", 0.0)))
-        delta_penalty += min(12.0, lat_jump / 200.0)
+        lat_jump = max(0.0, float(audio_metrics.get("response_latency_ms", 0.0)) - float(baseline_audio.get("response_latency_ms", 0.0)) - 250.0)
+        delta_penalty += min(12.0, lat_jump / 220.0)
 
-    cognitive_load = min(100.0, float(audio_metrics.get("response_latency_ms", 0.0)) / 25.0 + delta_penalty * 2.0)
+    # Normal conversational response onset takes 200-750ms; only penalize true hesitation (>750ms)
+    raw_latency = float(audio_metrics.get("response_latency_ms", 0.0))
+    cognitive_load = min(100.0, max(0.0, raw_latency - 750.0) / 22.0 + delta_penalty * 1.8)
 
     if audio_available:
         combined_stress = round(
@@ -506,14 +508,14 @@ def compute_truth_score(
             1,
         )
     else:
-        combined_stress = round(min(100.0, visual_stress + delta_penalty * 0.4), 1)
+        combined_stress = round(min(100.0, visual_stress + delta_penalty * 0.35), 1)
 
     consistency_index = round(max(0.0, min(100.0, 100.0 - combined_stress)), 1)
 
-    if consistency_index >= 72.0:
+    if consistency_index >= 65.0:
         classification = "Low Stress / Consistent"
         verdict_hi = "Ye bilkul sahi bol raha hai! Chehra aur awaaz bilkul natural aur steady hain."
-    elif consistency_index >= 45.0:
+    elif consistency_index >= 42.0:
         classification = "Moderate Cognitive Load"
         verdict_hi = "Dhyan dein! Jawab mein thoda hesitation aur confusion hai. Ek follow-up sawaal poochhein."
     else:

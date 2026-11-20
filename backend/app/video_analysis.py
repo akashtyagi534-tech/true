@@ -272,30 +272,35 @@ def analyze_video(video_path: str) -> dict:
 
     gaze_std_x = float(np.std(gaze_xs)) if len(gaze_xs) > 2 else 0.04
     gaze_std_y = float(np.std(gaze_ys)) if len(gaze_ys) > 2 else 0.03
-    gaze_instability = round(min(100.0, (gaze_std_x + gaze_std_y) * 280.0), 1)
+    gaze_instability = round(min(100.0, max(0.0, (gaze_std_x + gaze_std_y) - 0.06) * 200.0), 1)
     mean_gx = float(np.mean(gaze_xs)) if gaze_xs else 0.5
     gaze_dir = "Left (Recall)" if mean_gx < 0.44 else "Right (Construct)" if mean_gx > 0.56 else "Center (Direct)"
 
-    lip_compression = round(min(100.0, max(0.0, (0.45 - (float(np.mean(lip_ratios)) if lip_ratios else 0.25)) * 190.0)), 1)
-    eyebrow_asym = round(min(100.0, (float(np.mean(brow_asymmetries)) if brow_asymmetries else 0.08) * 180.0), 1)
-    nostril_flare = round(min(100.0, (float(np.std(nostril_vars)) if len(nostril_vars) > 2 else 2.0) * 8.5), 1)
+    avg_lip = float(np.mean(lip_ratios)) if lip_ratios else 0.25
+    lip_compression = round(min(100.0, max(0.0, (0.28 - avg_lip) * 140.0)), 1)
+    eyebrow_asym = round(min(100.0, max(0.0, (float(np.mean(brow_asymmetries)) if brow_asymmetries else 0.07) - 0.07) * 150.0), 1)
+    nostril_flare = round(min(100.0, max(0.0, (float(np.std(nostril_vars)) if len(nostril_vars) > 2 else 1.8) - 1.5) * 6.5), 1)
 
     rppg_bpm, rppg_quality = _estimate_rppg_bpm(green_means, eff_sample_rate)
 
     if len(head_centers) > 2:
         xs = [p[0] for p in head_centers]
         ys = [p[1] for p in head_centers]
-        head_jitter = round(min(100.0, (float(np.std(xs)) + float(np.std(ys))) * 700.0), 1)
+        head_jitter = round(min(100.0, max(0.0, (float(np.std(xs)) + float(np.std(ys))) - 0.022) * 420.0), 1)
     else:
-        head_jitter = 18.0
+        head_jitter = 14.0
 
     avg_motion = float(np.mean(motion_deltas)) if motion_deltas else 0.0
     std_motion = float(np.std(motion_deltas)) if motion_deltas else 0.0
-    motion_jitter = round(min(100.0, (std_motion * 6.5) + (avg_motion * 2.0)), 1)
+    # Subtract natural handheld smartphone shake floor before penalizing sudden jerky motion
+    motion_jitter = round(
+        min(100.0, max(0.0, std_motion - 1.6) * 4.4 + max(0.0, avg_motion - 4.5) * 1.6),
+        1,
+    )
 
     # Postural freeze: abnormally low upper-body motion (<1.8 mean pixel diff while face present)
-    postural_freeze = round(min(100.0, max(0.0, (3.2 - avg_motion) * 26.0)), 1) if face_frames > 4 else 15.0
-    shoulder_shrug = round(min(100.0, (float(np.mean(shoulder_asym_deltas)) if shoulder_asym_deltas else 1.2) * 8.0), 1)
+    postural_freeze = round(min(100.0, max(0.0, (2.6 - avg_motion) * 22.0)), 1) if face_frames > 4 else 12.0
+    shoulder_shrug = round(min(100.0, max(0.0, (float(np.mean(shoulder_asym_deltas)) if shoulder_asym_deltas else 1.2) - 1.0) * 6.5), 1)
     hand_adaptor_rate = round((hand_adaptor_frames / max(1, face_frames)) * 100.0, 1)
 
     # Media Authenticity: Face Liveness & Deepfake check
@@ -308,16 +313,21 @@ def analyze_video(video_path: str) -> dict:
     real_human_pct = round(max(12.0, min(99.2, 84.0 + rppg_bonus - smooth_penalty - boundary_penalty)), 1)
     deepfake_risk_pct = round(100.0 - real_human_pct, 1)
 
-    blink_deviation = min(100.0, abs(blink_rate - 17.0) * 3.0) if face_frames > 0 else 25.0
+    # Normal resting blink rate is 11-23/min; tolerate Haar indoor lighting noise up to ±6 blinks/min
+    blink_rate_clamped = min(blink_rate, 48.0)
+    blink_deviation = min(100.0, max(0.0, abs(blink_rate_clamped - 17.0) - 6.0) * 2.2) if face_frames > 0 else 18.0
     visual_stress = round(
         min(
             100.0,
-            0.25 * motion_jitter
-            + 0.20 * blink_deviation
-            + 0.18 * gaze_instability
-            + 0.15 * lip_compression
-            + 0.12 * eyebrow_asym
-            + 0.10 * head_jitter,
+            max(
+                8.0,
+                0.24 * motion_jitter
+                + 0.20 * blink_deviation
+                + 0.18 * gaze_instability
+                + 0.14 * lip_compression
+                + 0.12 * eyebrow_asym
+                + 0.12 * head_jitter,
+            ),
         ),
         1,
     )

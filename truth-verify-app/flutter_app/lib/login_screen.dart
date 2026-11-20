@@ -20,6 +20,7 @@ class _LoginScreenState extends State<LoginScreen> {
   AuthProfile? _profile;
   bool _googleBusy = false;
   bool _emailBusy = false;
+  bool _obscurePassword = true;
   String? _error;
   String? _healthStatus;
 
@@ -291,13 +292,13 @@ class _LoginScreenState extends State<LoginScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const Text(
-                      'Admin / Email Login',
+                      'Instant Email & Admin Login',
                       style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: 4),
                     const Text(
-                      'Admin Control Panel kholne ke liye apna Admin Email aur Password dalein.',
-                      style: TextStyle(fontSize: 12, color: TruthLensColors.textMuted),
+                      'Normal User: apna email dalein (password khali chhodein).\nAdmin Panel ke liye: Admin Email + Admin Password dalein.',
+                      style: TextStyle(fontSize: 12, height: 1.4, color: TruthLensColors.textMuted),
                     ),
                     const SizedBox(height: 14),
                     TextField(
@@ -311,17 +312,36 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 12),
                     TextField(
                       controller: _passwordCtrl,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Admin Password',
-                        prefixIcon: Icon(Icons.lock_outline),
+                      obscureText: _obscurePassword,
+                      decoration: InputDecoration(
+                        labelText: 'Admin Password (Sirf Admin ke liye)',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        suffixIcon: IconButton(
+                          onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                          icon: Icon(
+                            _obscurePassword ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                            color: TruthLensColors.textMuted,
+                          ),
+                        ),
                       ),
                     ),
                     if (_error != null) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        _error!,
-                        style: const TextStyle(color: TruthLensColors.neonRose, fontSize: 12.5),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0x22FB7185),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0x66FB7185)),
+                        ),
+                        child: Text(
+                          _error!,
+                          style: const TextStyle(
+                            color: TruthLensColors.neonRose,
+                            fontSize: 12,
+                            height: 1.45,
+                          ),
+                        ),
                       ),
                     ],
                     const SizedBox(height: 14),

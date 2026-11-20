@@ -110,5 +110,65 @@ def test_21_point_multimodal_scoring_and_coach():
     assert report["authenticity"]["real_human_pct"] == 92.0
     assert report["authenticity"]["human_voice_pct"] == 94.0
     assert "Reverse Order Test" in report["interrogation_coach"]["reverse_chronological_test"]
-    assert report["verdict_hi"]
+    assert report["consistency_index"] < 42.0
+    assert "jhoot" in report["verdict_hi"].lower()
+
+
+def test_calm_truthful_speaker_scores_consistent():
+    from app.scoring import compute_truth_score
+
+    baseline_v = {"rppg_bpm": 72.0, "blink_rate_per_min": 16.0, "visual_stress_index": 16.0}
+    baseline_a = {"response_latency_ms": 340.0, "vocal_stress_index": 18.0, "audio_available": True}
+    calm_v = {
+        "face_detected_ratio": 92.0,
+        "blink_rate_per_min": 17.5,
+        "blink_duration_ms": 185.0,
+        "pupil_dilation_ratio": 24.0,
+        "gaze_instability_index": 14.0,
+        "gaze_aversion_direction": "Center (Direct)",
+        "lip_compression_index": 15.0,
+        "eyebrow_asymmetry_index": 12.0,
+        "nostril_flare_index": 11.0,
+        "duping_delight_flashes": 0,
+        "rppg_bpm": 74.0,
+        "head_jitter_index": 14.0,
+        "postural_freeze_index": 18.0,
+        "shoulder_shrug_asymmetry": 10.0,
+        "hand_to_face_adaptors_pct": 0.0,
+        "swallowing_larynx_spikes": 0,
+        "motion_jitter_index": 16.0,
+        "first_expression_sec": 0.35,
+        "real_human_pct": 94.0,
+        "visual_stress_index": 18.0,
+    }
+    calm_a = {
+        "audio_available": True,
+        "response_latency_ms": 420.0,
+        "voice_micro_tremor_index": 16.0,
+        "pitch_jitter_pct": 2.1,
+        "amplitude_shimmer_pct": 2.4,
+        "formant_center_hz": 1320.0,
+        "formant_shift_index": 14.0,
+        "sharp_inhalations": 1,
+        "breathing_irregularity": 12.0,
+        "speech_rate_wps": 2.3,
+        "speech_rate_variance": 18.0,
+        "first_speech_sec": 0.42,
+        "pause_ratio": 24.0,
+        "linguistic": {"pronoun_rate_pct": 8.5, "pronoun_avoidance_flag": False},
+        "human_voice_pct": 95.0,
+        "vocal_stress_index": 19.0,
+    }
+
+    report = compute_truth_score(
+        calm_v,
+        calm_a,
+        baseline_video=baseline_v,
+        baseline_audio=baseline_a,
+        question="Aapka poora naam kya hai?",
+    )
+    assert report["consistency_index"] >= 75.0
+    assert report["classification"] == "Low Stress / Consistent"
+    assert "sahi bol raha hai" in report["verdict_hi"].lower()
+
 
