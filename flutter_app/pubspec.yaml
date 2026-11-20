@@ -1,10 +1,10 @@
 name: truth_verify_app
-description: Truth Lens Pro — Forensic Behavioral Scanner, Hindi Voice Verdict, Google Wallet & OTA Engine.
+description: Truth Lens Pro — 22-Point Forensic Behavioral Scanner, Automatic Voice Verdict (TTS), Google Sign-In, Dual Mode & Session History.
 publish_to: 'none'
-version: 4.0.0+4
+version: 4.1.0+5
 
 environment:
-  sdk: '>=3.4.0 <4.0.0'
+  sdk: '>=3.5.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -15,6 +15,7 @@ dependencies:
   permission_handler: ^11.3.1
   flutter_tts: ^4.2.5
   google_sign_in: ^6.2.2
+  shared_preferences: ^2.3.5
 
 flutter:
   uses-material-design: true

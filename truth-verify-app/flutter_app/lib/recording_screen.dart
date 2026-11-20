@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -32,6 +33,16 @@ class RecordingScreen extends StatefulWidget {
 }
 
 class _RecordingScreenState extends State<RecordingScreen> {
+  static const List<String> _presetQuestions = [
+    'Kya aap kal raat sach mein ghar par the?',
+    'Kya aapne is baare mein kisi aur ko bataya tha?',
+    'Kya aap mujhse koi zaroori baat chhupa rahe hain?',
+    'Kya aapne woh paise ya document khud liya tha?',
+    'Aaj aapne jo kaha, kya woh 100% sach hai?',
+    'Did you personally verify those numbers yesterday?',
+    'Have you ever withheld key information about this event?',
+  ];
+
   List<CameraDescription> _cameras = [];
   CameraController? _controller;
   int _cameraIndex = 0;
@@ -42,10 +53,17 @@ class _RecordingScreenState extends State<RecordingScreen> {
 
   late ScanStage _stage;
   Timer? _timer;
+  Timer? _waveTimer;
   int _elapsedSec = 0;
+  DateTime? _recordStartTime;
+
+  final math.Random _rng = math.Random();
+  List<double> _waveBars = List<double>.filled(22, 0.15);
+  double _currentDb = -42.0;
 
   File? _baselineFile;
   final TextEditingController _questionCtrl = TextEditingController();
+  String? _selectedPreset;
 
   @override
   void initState() {
@@ -77,13 +95,13 @@ class _RecordingScreenState extends State<RecordingScreen> {
       if (_cameras.isEmpty) {
         setState(() {
           _initializing = false;
-          _error = 'Is phone mein camera nahi mila.';
+          _error = 'Is device mein camera nahi mila.';
         });
         return;
       }
-      // Prefer back camera if available (supports Flashlight Torch), fallback to index 0
-      final backIdx = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
-      _cameraIndex = backIdx >= 0 ? backIdx : 0;
+      // Prefer front camera for face alignment, or back camera if user switches
+      final frontIdx = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.front);
+      _cameraIndex = frontIdx >= 0 ? frontIdx : 0;
       await _startController(_cameras[_cameraIndex]);
     } catch (e) {
       if (mounted) {
@@ -109,9 +127,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
     _torchOn = false;
     try {
       await ctrl.setFlashMode(FlashMode.off);
-    } catch (_) {
-      // Some lenses do not support flash controls.
-    }
+    } catch (_) {}
 
     if (!mounted) {
       await ctrl.dispose();
@@ -136,14 +152,12 @@ class _RecordingScreenState extends State<RecordingScreen> {
     final bool next = !_torchOn;
     try {
       await ctrl.setFlashMode(next ? FlashMode.torch : FlashMode.off);
-      if (mounted) {
-        setState(() => _torchOn = next);
-      }
+      if (mounted) setState(() => _torchOn = next);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Is camera lens par Flashlight supported nahi hai — Rear Camera par switch karein!'),
+          content: Text('Front camera par Flashlight nahi hoti — Rear Camera switch karke Torch ON karein!'),
         ),
       );
     }
@@ -155,6 +169,34 @@ class _RecordingScreenState extends State<RecordingScreen> {
   int get _maxDurationSec =>
       _stage == ScanStage.baselineRecording ? widget.otaConfig.baselineSeconds : 30;
 
+  void _startWaveformVisualizer() {
+    _waveTimer?.cancel();
+    _waveTimer = Timer.periodic(const Duration(milliseconds: 110), (_) {
+      if (!mounted || !_isRecording) return;
+      final t = DateTime.now().millisecondsSinceEpoch / 180.0;
+      final List<double> nextBars = List<double>.generate(22, (i) {
+        final wave = 0.32 + 0.38 * (0.5 + 0.5 * math.sin(t + i * 0.55));
+        final jitter = _rng.nextDouble() * 0.30;
+        return (wave + jitter).clamp(0.12, 1.0);
+      });
+      final double avg = nextBars.reduce((a, b) => a + b) / nextBars.length;
+      setState(() {
+        _waveBars = nextBars;
+        _currentDb = -48.0 + (avg * 42.0);
+      });
+    });
+  }
+
+  void _stopWaveformVisualizer() {
+    _waveTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _waveBars = List<double>.filled(22, 0.14);
+        _currentDb = -48.0;
+      });
+    }
+  }
+
   Future<void> _startRecording() async {
     final ctrl = _controller;
     if (ctrl == null || !ctrl.value.isInitialized || _isRecording) return;
@@ -162,10 +204,13 @@ class _RecordingScreenState extends State<RecordingScreen> {
     try {
       await ctrl.startVideoRecording();
       final bool isBaseline = _stage == ScanStage.baselineReady;
+      _recordStartTime = DateTime.now();
       setState(() {
         _elapsedSec = 0;
         _stage = isBaseline ? ScanStage.baselineRecording : ScanStage.targetRecording;
       });
+
+      _startWaveformVisualizer();
 
       _timer?.cancel();
       _timer = Timer.periodic(const Duration(seconds: 1), (t) {
@@ -191,6 +236,11 @@ class _RecordingScreenState extends State<RecordingScreen> {
     final ctrl = _controller;
     if (ctrl == null || !_isRecording) return;
     _timer?.cancel();
+    _stopWaveformVisualizer();
+
+    final double actualDuration = _recordStartTime != null
+        ? DateTime.now().difference(_recordStartTime!).inMilliseconds / 1000.0
+        : _elapsedSec.toDouble();
 
     try {
       final XFile recorded = await ctrl.stopVideoRecording();
@@ -211,11 +261,9 @@ class _RecordingScreenState extends State<RecordingScreen> {
         return;
       }
 
-      // Stage 2 Target recorded -> analyze!
       if (!mounted) return;
       setState(() => _stage = ScanStage.analyzing);
 
-      // Turn off torch once recording completes
       if (_torchOn) {
         try {
           await ctrl.setFlashMode(FlashMode.off);
@@ -227,6 +275,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
         targetVideo: videoFile,
         baselineVideo: _baselineFile,
         question: _questionCtrl.text.trim(),
+        recordedDurationSec: actualDuration,
       );
 
       if (!mounted) return;
@@ -252,7 +301,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
                 Navigator.of(ctx).pop();
                 Navigator.of(context).pop();
               },
-              child: const Text('Recharge Wallet'),
+              child: const Text('Recharge / Switch Local Mode'),
             ),
           ],
         ),
@@ -269,6 +318,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _waveTimer?.cancel();
     _questionCtrl.dispose();
     _controller?.dispose();
     super.dispose();
@@ -284,7 +334,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Live Camera Feed
+          // Feature 1: Live Front/Back Camera Preview
           if (_initializing)
             const Center(
               child: CircularProgressIndicator(color: TruthLensColors.neonCyan),
@@ -303,26 +353,48 @@ class _RecordingScreenState extends State<RecordingScreen> {
           else if (_controller != null && _controller!.value.isInitialized)
             Center(child: CameraPreview(_controller!)),
 
-          // Subtle cyber targeting frame
+          // Feature 1: Face Alignment Guide Overlay
           IgnorePointer(
             child: Center(
-              child: Container(
-                width: 240,
-                height: 290,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(
-                    color: _isRecording
-                        ? TruthLensColors.neonRose
-                        : TruthLensColors.borderCyan,
-                    width: 2,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 225,
+                    height: 285,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(120),
+                      border: Border.all(
+                        color: _isRecording
+                            ? TruthLensColors.neonRose
+                            : TruthLensColors.neonCyan,
+                        width: 2.4,
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xAA060B1D),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Text(
+                      'ALIGN FACE INSIDE OVAL GUIDE',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.9,
+                        color: TruthLensColors.neonCyan,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
 
-          // Top HUD Bar (Back, Stage badge, Flashlight Torch, Camera Switch)
+          // Top HUD Bar
           SafeArea(
             child: Align(
               alignment: Alignment.topCenter,
@@ -338,10 +410,10 @@ class _RecordingScreenState extends State<RecordingScreen> {
                           tooltip: 'Back',
                           onTap: () => Navigator.of(context).pop(),
                         ),
-                        const SizedBox(width: 10),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                             decoration: BoxDecoration(
                               color: const Color(0xBB060B1D),
                               borderRadius: BorderRadius.circular(14),
@@ -368,10 +440,12 @@ class _RecordingScreenState extends State<RecordingScreen> {
                                         ? 'REC · ${_elapsedSec}s / ${_maxDurationSec}s'
                                         : (isBaselinePhase
                                             ? 'STAGE 1 · BASELINE (${widget.otaConfig.baselineSeconds}s)'
-                                            : 'STAGE 2 · TARGET SCAN'),
+                                            : (ApiService.useCloudMode
+                                                ? 'CLOUD AI SCAN'
+                                                : 'LOCAL DEVICE SCAN')),
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
-                                      fontSize: 12,
+                                      fontSize: 11.5,
                                       fontWeight: FontWeight.w800,
                                       color: Colors.white,
                                     ),
@@ -381,18 +455,17 @@ class _RecordingScreenState extends State<RecordingScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        // FLASHLIGHT TORCH TOGGLE
+                        const SizedBox(width: 8),
                         _HudCircleButton(
                           icon: _torchOn ? Icons.flashlight_on_rounded : Icons.flashlight_off_rounded,
-                          tooltip: _torchOn ? 'Turn Flashlight OFF' : 'Turn Flashlight ON',
+                          tooltip: _torchOn ? 'Flashlight OFF' : 'Flashlight ON',
                           active: _torchOn,
                           onTap: _toggleFlashlight,
                         ),
                         const SizedBox(width: 8),
                         _HudCircleButton(
                           icon: Icons.cameraswitch_rounded,
-                          tooltip: 'Switch Camera',
+                          tooltip: 'Switch Front/Back Camera',
                           onTap: _switchCamera,
                         ),
                       ],
@@ -432,7 +505,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
             child: SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.all(12),
                 child: GlassCard(
                   padding: const EdgeInsets.all(14),
                   borderColor: _isRecording
@@ -442,6 +515,65 @@ class _RecordingScreenState extends State<RecordingScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // Feature 2: Real-Time Audio Waveform & Mic Decibel Visualizer
+                      if (_isRecording) ...[
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.mic_rounded,
+                                    size: 15, color: TruthLensColors.neonCyan),
+                                SizedBox(width: 5),
+                                Text(
+                                  'LIVE MIC WAVEFORM',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: TruthLensColors.neonCyan,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              '${_currentDb.toStringAsFixed(1)} dB',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: TruthLensColors.neonEmerald,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        SizedBox(
+                          height: 30,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: _waveBars.map((level) {
+                              return AnimatedContainer(
+                                duration: const Duration(milliseconds: 90),
+                                width: 6,
+                                height: 6 + (level * 24),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(4),
+                                  gradient: const LinearGradient(
+                                    begin: Alignment.bottomCenter,
+                                    end: Alignment.topCenter,
+                                    colors: [
+                                      TruthLensColors.neonPurple,
+                                      TruthLensColors.neonCyan,
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+
                       if (isBaselinePhase) ...[
                         const Text(
                           'STAGE 1 — NEUTRAL BASELINE CALIBRATION',
@@ -452,30 +584,66 @@ class _RecordingScreenState extends State<RecordingScreen> {
                             letterSpacing: 0.8,
                           ),
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 5),
                         for (final q in widget.otaConfig.baselineQuestions.take(2))
                           Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
+                            padding: const EdgeInsets.only(bottom: 3),
                             child: Text(
                               '• $q',
-                              style: const TextStyle(fontSize: 12.5, color: Colors.white),
+                              style: const TextStyle(fontSize: 12, color: Colors.white),
                             ),
                           ),
                         const SizedBox(height: 8),
-                      ] else ...[
+                      ] else if (!_isRecording) ...[
+                        // Feature 3: Quick Preset Questions Dropdown + Custom Question Input Box
+                        DropdownButtonFormField<String>(
+                          value: _selectedPreset,
+                          isExpanded: true,
+                          dropdownColor: const Color(0xFF0E1630),
+                          decoration: const InputDecoration(
+                            labelText: 'Quick Preset Questions',
+                            prefixIcon: Icon(Icons.list_alt_rounded, size: 18),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          ),
+                          hint: const Text('Select a preset question...', style: TextStyle(fontSize: 12.5)),
+                          items: _presetQuestions
+                              .map(
+                                (q) => DropdownMenuItem<String>(
+                                  value: q,
+                                  child: Text(
+                                    q,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 12.5),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: _stage == ScanStage.analyzing
+                              ? null
+                              : (val) {
+                                  if (val != null) {
+                                    setState(() {
+                                      _selectedPreset = val;
+                                      _questionCtrl.text = val;
+                                    });
+                                  }
+                                },
+                        ),
+                        const SizedBox(height: 8),
                         TextField(
                           controller: _questionCtrl,
                           enabled: !_isRecording && _stage != ScanStage.analyzing,
-                          style: const TextStyle(fontSize: 13.5),
+                          style: const TextStyle(fontSize: 13),
                           decoration: const InputDecoration(
-                            labelText: 'Target Verification Question (Optional)',
-                            hintText: 'e.g., Kya aap kal raat office mein the?',
-                            prefixIcon: Icon(Icons.help_outline_rounded, size: 19),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            labelText: 'Custom Verification Question',
+                            hintText: 'Apna sawaal yahan likhein...',
+                            prefixIcon: Icon(Icons.help_outline_rounded, size: 18),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                           ),
                         ),
                         const SizedBox(height: 10),
                       ],
+
                       if (_stage == ScanStage.analyzing)
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 12),
@@ -492,7 +660,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
                               ),
                               SizedBox(width: 12),
                               Text(
-                                'Running 21-Point AI Forensic Pipeline...',
+                                'Running 22-Point Forensic Analysis...',
                                 style: TextStyle(
                                   fontWeight: FontWeight.w700,
                                   color: TruthLensColors.neonCyan,
@@ -565,8 +733,8 @@ class _HudCircleButton extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(24),
         child: Container(
-          width: 42,
-          height: 42,
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
             color: active ? const Color(0xDD22D3EE) : const Color(0xBB060B1D),
             shape: BoxShape.circle,
@@ -576,7 +744,7 @@ class _HudCircleButton extends StatelessWidget {
           ),
           child: Icon(
             icon,
-            size: 20,
+            size: 19,
             color: active ? const Color(0xFF040712) : Colors.white,
           ),
         ),

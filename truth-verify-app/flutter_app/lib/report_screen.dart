@@ -1,4 +1,7 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 import 'api_service.dart';
@@ -6,86 +9,172 @@ import 'theme.dart';
 
 class ReportScreen extends StatefulWidget {
   final AnalysisReport report;
+  final bool autoSpeakOnOpen;
 
-  const ReportScreen({super.key, required this.report});
+  const ReportScreen({
+    super.key,
+    required this.report,
+    this.autoSpeakOnOpen = true,
+  });
 
   @override
   State<ReportScreen> createState() => _ReportScreenState();
 }
 
 class _ReportScreenState extends State<ReportScreen> {
-  final FlutterTts _tts = FlutterTts();
+  final FlutterTts _flutterTts = FlutterTts();
   bool _isSpeaking = false;
   bool _muted = false;
 
   @override
   void initState() {
     super.initState();
-    _initAndSpeakVerdict();
+    _initTtsAndSpeak();
   }
 
-  Future<void> _initAndSpeakVerdict() async {
+  Future<void> _initTtsAndSpeak() async {
     try {
-      await _tts.setSpeechRate(0.47);
-      await _tts.setVolume(1.0);
-      await _tts.setPitch(1.0);
+      await _flutterTts.awaitSpeakCompletion(true);
+      await _flutterTts.setSpeechRate(0.5);
+      await _flutterTts.setVolume(1.0);
+      await _flutterTts.setPitch(1.0);
 
-      // Try Hindi (hi-IN) first, fall back cleanly to Indian English (en-IN)
-      final dynamic avail = await _tts.isLanguageAvailable('hi-IN');
-      if (avail == true || avail == 1) {
-        await _tts.setLanguage('hi-IN');
+      final dynamic hiAvailable = await _flutterTts.isLanguageAvailable('hi-IN');
+      if (hiAvailable == true || hiAvailable == 1) {
+        await _flutterTts.setLanguage('hi-IN');
       } else {
-        await _tts.setLanguage('en-IN');
+        await _flutterTts.setLanguage('en-IN');
       }
 
-      _tts.setStartHandler(() {
+      _flutterTts.setStartHandler(() {
         if (mounted) setState(() => _isSpeaking = true);
       });
-      _tts.setCompletionHandler(() {
+      _flutterTts.setCompletionHandler(() {
         if (mounted) setState(() => _isSpeaking = false);
       });
-      _tts.setCancelHandler(() {
+      _flutterTts.setCancelHandler(() {
+        if (mounted) setState(() => _isSpeaking = false);
+      });
+      _flutterTts.setErrorHandler((_) {
         if (mounted) setState(() => _isSpeaking = false);
       });
 
-      if (!_muted && ApiService.otaConfig.activeDetectors['hindi_voice_tts'] != false) {
-        await _speakNow();
+      if (widget.autoSpeakOnOpen &&
+          !_muted &&
+          ApiService.otaConfig.activeDetectors['hindi_voice_tts'] != false) {
+        await _speakFullReport();
       }
-    } catch (_) {
-      // Ignore TTS engine unavailability on emulators.
-    }
-  }
-
-  Future<void> _speakNow() async {
-    try {
-      await _tts.stop();
-      setState(() {
-        _muted = false;
-        _isSpeaking = true;
-      });
-      await _tts.speak(widget.report.verdictHi);
     } catch (_) {
       if (mounted) setState(() => _isSpeaking = false);
     }
   }
 
-  Future<void> _toggleMute() async {
-    if (_muted) {
-      await _speakNow();
-    } else {
-      await _tts.stop();
+  Future<void> _speakFullReport() async {
+    try {
+      await _flutterTts.stop();
       if (mounted) {
         setState(() {
-          _muted = true;
-          _isSpeaking = false;
+          _muted = false;
+          _isSpeaking = true;
         });
       }
+      final script = widget.report.buildSpokenVerdictScript();
+      await _flutterTts.speak(script);
+    } catch (_) {
+      if (mounted) setState(() => _isSpeaking = false);
     }
+  }
+
+  Future<void> _toggleSpeaker() async {
+    if (_isSpeaking) {
+      await _flutterTts.stop();
+      if (mounted) {
+        setState(() {
+          _isSpeaking = false;
+          _muted = true;
+        });
+      }
+    } else {
+      await _speakFullReport();
+    }
+  }
+
+  Future<void> _openExportSummarySheet() async {
+    final summaryText = widget.report.buildExportTextSummary();
+    await Clipboard.setData(ClipboardData(text: summaryText));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Full Forensic Report copied to clipboard — ready to share!'),
+      ),
+    );
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0A1024),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.ios_share_rounded, color: TruthLensColors.neonCyan),
+                SizedBox(width: 8),
+                Text(
+                  'Export / Share Report Summary',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 320),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF050814),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: TruthLensColors.borderCyan),
+              ),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  summaryText,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11.5,
+                    height: 1.45,
+                    color: Color(0xFFE2E8F0),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            NeonGradientButton(
+              label: 'Copy Text Summary Again',
+              icon: Icons.copy_all_rounded,
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: summaryText));
+                if (!mounted) return;
+                Navigator.of(ctx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Copied forensic summary to clipboard!')),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   void dispose() {
-    _tts.stop();
+    _flutterTts.stop();
     super.dispose();
   }
 
@@ -106,7 +195,6 @@ class _ReportScreenState extends State<ReportScreen> {
     final r = widget.report;
     final Color accent = _scoreColor(r.consistencyIndex);
 
-    // Group 21 indicators by category
     final Map<String, List<IndicatorItem>> grouped = {};
     for (final item in r.indicators21) {
       grouped.putIfAbsent(item.category, () => []).add(item);
@@ -115,23 +203,22 @@ class _ReportScreenState extends State<ReportScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'FORENSIC REPORT',
-          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0, fontSize: 16),
+          'TRUTH LENS REPORT',
+          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0, fontSize: 15),
         ),
         actions: [
           IconButton(
-            tooltip: 'Replay Voice Verdict',
-            onPressed: _speakNow,
-            icon: const Icon(Icons.replay_circle_filled_rounded,
-                color: TruthLensColors.neonCyan),
+            tooltip: _isSpeaking ? 'Stop Voice' : 'Replay Voice Report',
+            onPressed: _toggleSpeaker,
+            icon: Icon(
+              _isSpeaking ? Icons.stop_circle_rounded : Icons.volume_up_rounded,
+              color: _isSpeaking ? TruthLensColors.neonRose : TruthLensColors.neonCyan,
+            ),
           ),
           IconButton(
-            tooltip: _muted ? 'Unmute Voice' : 'Mute Voice',
-            onPressed: _toggleMute,
-            icon: Icon(
-              _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-              color: _muted ? TruthLensColors.neonRose : TruthLensColors.neonEmerald,
-            ),
+            tooltip: 'Export / Share Summary',
+            onPressed: _openExportSummarySheet,
+            icon: const Icon(Icons.share_rounded, color: TruthLensColors.neonPurple),
           ),
         ],
       ),
@@ -139,83 +226,83 @@ class _ReportScreenState extends State<ReportScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
           children: [
-            // Hero Verdict + Voice TTS Control Card
+            // Features 6, 7, 8 & 15: Color-Coded Consistency Gauge + Cognitive Load + Stress % + Voice Verdict
             GlassCard(
               padding: const EdgeInsets.all(20),
               borderColor: accent,
               child: Column(
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0x3322D3EE),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          r.calibrated
-                              ? '2-STAGE CALIBRATED · ${r.confidence.toUpperCase()}'
-                              : '${r.analysisMode.toUpperCase()} · ${r.confidence.toUpperCase()}',
-                          style: const TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w800,
-                            color: TruthLensColors.neonCyan,
-                          ),
-                        ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0x3322D3EE),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '${r.analysisMode.toUpperCase()} · ${r.confidence.toUpperCase()} CONFIDENCE',
+                      style: const TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                        color: TruthLensColors.neonCyan,
                       ),
-                    ],
+                    ),
                   ),
                   const SizedBox(height: 16),
-                  // Glowing Score Ring
-                  Container(
-                    width: 136,
-                    height: 136,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: accent, width: 6),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Color.fromRGBO(accent.red, accent.green, accent.blue, 0.35),
-                          blurRadius: 28,
+                  // Custom Painted Consistency Score Gauge (0-100)
+                  SizedBox(
+                    width: 154,
+                    height: 154,
+                    child: CustomPaint(
+                      painter: _ScoreGaugePainter(
+                        score: r.consistencyIndex,
+                        accent: accent,
+                      ),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${r.consistencyIndex.round()}',
+                              style: TextStyle(
+                                fontSize: 42,
+                                fontWeight: FontWeight.w900,
+                                color: accent,
+                              ),
+                            ),
+                            const Text(
+                              'OUT OF 100',
+                              style: TextStyle(
+                                fontSize: 10,
+                                letterSpacing: 1.0,
+                                color: TruthLensColors.textMuted,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          '${r.consistencyIndex.toStringAsFixed(0)}%',
-                          style: TextStyle(
-                            fontSize: 38,
-                            fontWeight: FontWeight.w900,
-                            color: accent,
-                          ),
-                        ),
-                        const Text(
-                          'CONSISTENCY',
-                          style: TextStyle(
-                            fontSize: 10,
-                            letterSpacing: 1.1,
-                            color: TruthLensColors.textMuted,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   Text(
-                    r.classification,
+                    r.cognitiveLoadClassification,
                     style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
                       color: accent,
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  // Spoken Hindi/Hinglish Verdict Box
+                  const SizedBox(height: 4),
+                  Text(
+                    'Stress Index: ${r.stressPercentage.toStringAsFixed(1)}% (100 - Consistency)',
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: TruthLensColors.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  // Spoken Hindi/Hinglish Voice Verdict Box
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(14),
@@ -238,12 +325,11 @@ class _ReportScreenState extends State<ReportScreen> {
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              _isSpeaking ? 'AI BOL RAHA HAI...' : 'HINDI VOICE VERDICT',
+                              _isSpeaking ? 'SPEAKING VOICE REPORT...' : 'AUTO VOICE VERDICT (TTS)',
                               style: const TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w800,
                                 color: TruthLensColors.neonCyan,
-                                letterSpacing: 0.8,
                               ),
                             ),
                           ],
@@ -253,10 +339,9 @@ class _ReportScreenState extends State<ReportScreen> {
                           r.verdictHi,
                           textAlign: TextAlign.center,
                           style: const TextStyle(
-                            fontSize: 15,
+                            fontSize: 14.5,
                             fontWeight: FontWeight.w700,
                             height: 1.45,
-                            color: Colors.white,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -268,8 +353,8 @@ class _ReportScreenState extends State<ReportScreen> {
                                 backgroundColor: TruthLensColors.neonCyan,
                                 foregroundColor: const Color(0xFF040712),
                               ),
-                              onPressed: _speakNow,
-                              icon: const Icon(Icons.volume_up_rounded, size: 18),
+                              onPressed: _speakFullReport,
+                              icon: const Icon(Icons.replay_rounded, size: 18),
                               label: const Text(
                                 'Replay Voice',
                                 style: TextStyle(fontWeight: FontWeight.w800),
@@ -279,19 +364,14 @@ class _ReportScreenState extends State<ReportScreen> {
                             OutlinedButton.icon(
                               style: OutlinedButton.styleFrom(
                                 foregroundColor:
-                                    _muted ? TruthLensColors.neonRose : Colors.white,
-                                side: BorderSide(
-                                  color: _muted
-                                      ? TruthLensColors.neonRose
-                                      : const Color(0x5594A3B8),
-                                ),
+                                    _isSpeaking ? TruthLensColors.neonRose : Colors.white,
                               ),
-                              onPressed: _toggleMute,
+                              onPressed: _toggleSpeaker,
                               icon: Icon(
-                                _muted ? Icons.volume_off_rounded : Icons.stop_rounded,
+                                _isSpeaking ? Icons.stop_rounded : Icons.volume_up_rounded,
                                 size: 18,
                               ),
-                              label: Text(_muted ? 'Muted' : 'Mute'),
+                              label: Text(_isSpeaking ? 'Stop' : 'Speak'),
                             ),
                           ],
                         ),
@@ -304,7 +384,57 @@ class _ReportScreenState extends State<ReportScreen> {
 
             const SizedBox(height: 14),
 
-            // Module 4: Media Authenticity (Deepfake + Voice Clone)
+            // Features 9–14: 6 Core Signal Metric Cards
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: 1.55,
+              children: [
+                _MetricCard(
+                  icon: Icons.visibility_rounded,
+                  label: 'Visual Stress Index',
+                  value: '${r.visualStressIndex.toStringAsFixed(1)}%',
+                  color: TruthLensColors.neonPurple,
+                ),
+                _MetricCard(
+                  icon: Icons.graphic_eq_rounded,
+                  label: 'Vocal Stress Index',
+                  value: '${r.vocalStressIndex.toStringAsFixed(1)}%',
+                  color: TruthLensColors.neonCyan,
+                ),
+                _MetricCard(
+                  icon: Icons.remove_red_eye_rounded,
+                  label: 'Blink Frequency',
+                  value: '${r.blinkFrequency.toStringAsFixed(1)} /min',
+                  color: TruthLensColors.neonEmerald,
+                ),
+                _MetricCard(
+                  icon: Icons.music_note_rounded,
+                  label: 'Mean Vocal Pitch (F0)',
+                  value: '${r.meanVocalPitchHz.toStringAsFixed(0)} Hz',
+                  color: TruthLensColors.neonAmber,
+                ),
+                _MetricCard(
+                  icon: Icons.pause_circle_outline_rounded,
+                  label: 'Pause / Silence Ratio',
+                  value: '${r.pauseSilenceRatio.toStringAsFixed(1)}%',
+                  color: TruthLensColors.neonRose,
+                ),
+                _MetricCard(
+                  icon: Icons.face_retouching_natural_rounded,
+                  label: 'Micro-Expr / Motion Var',
+                  value: '${r.microExpressionVariance.toStringAsFixed(1)}%',
+                  color: const Color(0xFF38BDF8),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 14),
+
+            // Media Authenticity Card
             GlassCard(
               borderColor: TruthLensColors.borderCyan,
               child: Column(
@@ -317,22 +447,15 @@ class _ReportScreenState extends State<ReportScreen> {
                       const Expanded(
                         child: Text(
                           'Media Authenticity & Anti-Spoof',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                          style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800),
                         ),
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: const Color(0x2234D399),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          r.authenticity.overallStatus,
-                          style: const TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
-                            color: TruthLensColors.neonEmerald,
-                          ),
+                      Text(
+                        r.authenticity.overallStatus,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: TruthLensColors.neonEmerald,
                         ),
                       ),
                     ],
@@ -355,7 +478,7 @@ class _ReportScreenState extends State<ReportScreen> {
 
             const SizedBox(height: 14),
 
-            // Module 2: AI Interrogation Coach
+            // Feature 16: Follow-Up Question Recommendation Engine
             GlassCard(
               borderColor: TruthLensColors.borderPurple,
               child: Column(
@@ -367,23 +490,16 @@ class _ReportScreenState extends State<ReportScreen> {
                       const SizedBox(width: 8),
                       const Expanded(
                         child: Text(
-                          'AI Interrogation Coach',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                          'Follow-Up Question Engine',
+                          style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800),
                         ),
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: const Color(0x33A855F7),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          'LOAD: ${r.coach.cognitiveLoadLevel}',
-                          style: const TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFFE9D5FF),
-                          ),
+                      Text(
+                        'LOAD: ${r.coach.cognitiveLoadLevel}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFFE9D5FF),
                         ),
                       ),
                     ],
@@ -403,7 +519,7 @@ class _ReportScreenState extends State<ReportScreen> {
                     ),
                   for (final prompt in r.coach.targetedPrompts)
                     _CoachTile(
-                      title: 'Targeted Follow-Up',
+                      title: 'Hesitation Follow-Up',
                       body: prompt,
                       color: TruthLensColors.neonAmber,
                     ),
@@ -413,145 +529,275 @@ class _ReportScreenState extends State<ReportScreen> {
 
             const SizedBox(height: 14),
 
-            // Module 3: 21-Point Diagnostic Dashboard
-            GlassCard(
-              borderColor: TruthLensColors.borderCyan,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '21-Point Behavioral & Biometric Matrix (${r.indicators21.length})',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Stage 1 Baseline vs Stage 2 Target deltas across Ocular, rPPG, Kinesic & Bio-Acoustic signals.',
-                    style: TextStyle(fontSize: 11.5, color: TruthLensColors.textMuted),
-                  ),
-                  const SizedBox(height: 12),
-                  for (final entry in grouped.entries) ...[
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8, bottom: 6),
-                      child: Text(
-                        entry.key.toUpperCase(),
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          color: TruthLensColors.neonCyan,
-                          letterSpacing: 0.9,
-                        ),
-                      ),
+            // Full 21-Point Multi-Modal Matrix
+            if (r.indicators21.isNotEmpty) ...[
+              GlassCard(
+                borderColor: TruthLensColors.borderCyan,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '21-Point Biometric Signal Matrix (${r.indicators21.length})',
+                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800),
                     ),
-                    for (final ind in entry.value)
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 7),
-                        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
-                        decoration: BoxDecoration(
-                          color: const Color(0x88070C1F),
-                          borderRadius: BorderRadius.circular(11),
-                          border: Border.all(
-                            color: Color.fromRGBO(
-                              _statusColor(ind.status).red,
-                              _statusColor(ind.status).green,
-                              _statusColor(ind.status).blue,
-                              0.35,
-                            ),
+                    const SizedBox(height: 8),
+                    for (final entry in grouped.entries) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8, bottom: 6),
+                        child: Text(
+                          entry.key.toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            color: TruthLensColors.neonCyan,
                           ),
                         ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 24,
-                              height: 24,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: Color.fromRGBO(
-                                  _statusColor(ind.status).red,
-                                  _statusColor(ind.status).green,
-                                  _statusColor(ind.status).blue,
-                                  0.2,
-                                ),
-                                borderRadius: BorderRadius.circular(7),
-                              ),
-                              child: Text(
-                                '${ind.id}',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w800,
-                                  color: _statusColor(ind.status),
-                                ),
+                      ),
+                      for (final ind in entry.value)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 7),
+                          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+                          decoration: BoxDecoration(
+                            color: const Color(0x88070C1F),
+                            borderRadius: BorderRadius.circular(11),
+                            border: Border.all(
+                              color: Color.fromRGBO(
+                                _statusColor(ind.status).red,
+                                _statusColor(ind.status).green,
+                                _statusColor(ind.status).blue,
+                                0.35,
                               ),
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    ind.name,
-                                    style: const TextStyle(
-                                      fontSize: 12.5,
-                                      fontWeight: FontWeight.w700,
-                                    ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 24,
+                                height: 24,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: Color.fromRGBO(
+                                    _statusColor(ind.status).red,
+                                    _statusColor(ind.status).green,
+                                    _statusColor(ind.status).blue,
+                                    0.2,
                                   ),
-                                  Text(
-                                    ind.value,
-                                    style: const TextStyle(
-                                      fontSize: 11.5,
-                                      color: TruthLensColors.textMuted,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  'Δ ${ind.delta}',
+                                  borderRadius: BorderRadius.circular(7),
+                                ),
+                                child: Text(
+                                  '${ind.id}',
                                   style: TextStyle(
-                                    fontSize: 11.5,
+                                    fontSize: 11,
                                     fontWeight: FontWeight.w800,
                                     color: _statusColor(ind.status),
                                   ),
                                 ),
-                                Text(
-                                  ind.status.toUpperCase(),
-                                  style: const TextStyle(
-                                    fontSize: 9.5,
-                                    color: TruthLensColors.textMuted,
-                                  ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      ind.name,
+                                      style: const TextStyle(
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    Text(
+                                      ind.value,
+                                      style: const TextStyle(
+                                        fontSize: 11.5,
+                                        color: TruthLensColors.textMuted,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                          ],
+                              ),
+                              Text(
+                                'Δ ${ind.delta}',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: _statusColor(ind.status),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
+                    ],
                   ],
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
+
+            // Feature 22: Clip Metadata & Clear Disclaimer Banner
+            GlassCard(
+              padding: const EdgeInsets.all(14),
+              borderColor: const Color(0x4494A3B8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'CLIP METADATA & DISCLAIMER',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: TruthLensColors.neonCyan,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Duration: ${r.clipDurationSec.toStringAsFixed(1)}s  ·  File Size: ${r.formattedFileSize}  ·  Mode: ${r.analysisMode}\nReport ID: ${r.id}',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Colors.white,
+                      height: 1.45,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    r.disclaimer,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: TruthLensColors.textMuted,
+                      height: 1.4,
+                    ),
+                  ),
                 ],
               ),
             ),
 
             const SizedBox(height: 14),
 
-            // Disclaimer
-            Text(
-              r.disclaimer,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 11,
-                color: TruthLensColors.textMuted,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 14),
-            NeonGradientButton(
-              label: 'New Forensic Scan',
-              icon: Icons.radar_rounded,
-              onPressed: () => Navigator.of(context).pop(),
+            // Feature 18: Export / Share Summary + New Scan Actions
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                      foregroundColor: TruthLensColors.neonCyan,
+                      side: const BorderSide(color: TruthLensColors.borderCyan),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    onPressed: _openExportSummarySheet,
+                    icon: const Icon(Icons.share_rounded, size: 18),
+                    label: const Text('Export Summary'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: NeonGradientButton(
+                    label: 'New Scan',
+                    icon: Icons.radar_rounded,
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ScoreGaugePainter extends CustomPainter {
+  final double score;
+  final Color accent;
+
+  _ScoreGaugePainter({required this.score, required this.accent});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.width / 2) - 10;
+
+    final trackPaint = Paint()
+      ..color = const Color(0x3394A3B8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 11
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawCircle(center, radius, trackPaint);
+
+    final sweepPaint = Paint()
+      ..color = accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 11
+      ..strokeCap = StrokeCap.round;
+
+    final double sweep = (score.clamp(0.0, 100.0) / 100.0) * math.pi * 2;
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2,
+      sweep,
+      false,
+      sweepPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScoreGaugePainter oldDelegate) =>
+      oldDelegate.score != score || oldDelegate.accent != accent;
+}
+
+class _MetricCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  const _MetricCard({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: const EdgeInsets.all(12),
+      borderColor: Color.fromRGBO(color.red, color.green, color.blue, 0.45),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    color: TruthLensColors.textMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.w900,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }
