@@ -1,38 +1,48 @@
 import 'package:flutter/material.dart';
 import 'api_service.dart';
+import 'theme.dart';
 
 class AdminScreen extends StatefulWidget {
-  const AdminScreen({super.key, required this.apiService});
-
-  final ApiService apiService;
+  const AdminScreen({super.key});
 
   @override
   State<AdminScreen> createState() => _AdminScreenState();
 }
 
-class _AdminScreenState extends State<AdminScreen> {
-  Map<String, dynamic>? _data;
+class _AdminScreenState extends State<AdminScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs;
+  Map<String, dynamic>? _overview;
   bool _loading = true;
-  bool _saving = false;
   String? _error;
 
+  final _searchCtrl = TextEditingController();
   final _priceCtrl = TextEditingController();
-  final _minCtrl = TextEditingController();
+  final _minRecCtrl = TextEditingController();
   final _freeCtrl = TextEditingController();
   final _upiCtrl = TextEditingController();
+  final _otaVersionCtrl = TextEditingController();
+  final _otaMaintCtrl = TextEditingController();
+  final _otaQuestionsCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    _tabs = TabController(length: 5, vsync: this);
     _load();
   }
 
   @override
   void dispose() {
+    _tabs.dispose();
+    _searchCtrl.dispose();
     _priceCtrl.dispose();
-    _minCtrl.dispose();
+    _minRecCtrl.dispose();
     _freeCtrl.dispose();
     _upiCtrl.dispose();
+    _otaVersionCtrl.dispose();
+    _otaMaintCtrl.dispose();
+    _otaQuestionsCtrl.dispose();
     super.dispose();
   }
 
@@ -42,76 +52,72 @@ class _AdminScreenState extends State<AdminScreen> {
       _error = null;
     });
     try {
-      final res = await widget.apiService.fetchAdminOverview();
-      final cfg = (res['settings'] as Map<String, dynamic>?) ?? {};
-      _priceCtrl.text = '${cfg['price_per_question'] ?? 10}';
-      _minCtrl.text = '${cfg['min_recharge'] ?? 50}';
-      _freeCtrl.text = '${cfg['free_questions'] ?? 3}';
-      _upiCtrl.text = '${cfg['upi_id'] ?? ''}';
-      if (!mounted) return;
-      setState(() {
-        _data = res;
-        _loading = false;
-      });
+      final data = await ApiService.fetchAdminOverview();
+      final s = (data['settings'] as Map<String, dynamic>?) ?? const {};
+      final ota = (data['ota_config'] as Map<String, dynamic>?) ?? const {};
+      _priceCtrl.text = (s['price_per_question'] ?? 10).toString();
+      _minRecCtrl.text = (s['min_recharge'] ?? 50).toString();
+      _freeCtrl.text = (s['free_questions'] ?? 3).toString();
+      _upiCtrl.text = (s['upi_id'] ?? '').toString();
+      _otaVersionCtrl.text = (ota['app_version'] ?? '4.0.0').toString();
+      _otaMaintCtrl.text = (ota['maintenance_message'] ?? '').toString();
+      final qs = (ota['baseline_questions'] as List<dynamic>?) ?? const [];
+      _otaQuestionsCtrl.text = qs.map((e) => e.toString()).join('\n');
+
+      if (mounted) {
+        setState(() {
+          _overview = data;
+          _loading = false;
+        });
+      }
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = '$e';
-        _loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _error = e.toString().replaceFirst('Exception: ', '');
+          _loading = false;
+        });
+      }
     }
   }
 
-  Future<void> _saveSettings() async {
-    setState(() => _saving = true);
-    try {
-      await widget.apiService.updateAdminSettings(
-        pricePerQuestion: int.tryParse(_priceCtrl.text) ?? 10,
-        minRecharge: int.tryParse(_minCtrl.text) ?? 50,
-        freeQuestions: int.tryParse(_freeCtrl.text) ?? 3,
-        upiId: _upiCtrl.text,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pricing aur UPI settings live save ho gayi!')),
-      );
-      await _load();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _runAction(Future<void> Function() fn, String okMessage) async {
-    try {
-      await fn();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(okMessage)));
-      await _load();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-    }
-  }
-
-  Widget _statCard(String label, String value, Color accent) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF111827),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 11, color: Colors.white60)),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: accent),
+  Future<void> _openWalletAdjustDialog(Map<String, dynamic> user) async {
+    final amtCtrl = TextEditingController(text: '50');
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0E1630),
+        title: Text('Wallet: ${user['email']}'),
+        content: TextField(
+          controller: amtCtrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Amount (₹)'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(foregroundColor: TruthLensColors.neonRose),
+            onPressed: () async {
+              final amt = double.tryParse(amtCtrl.text.trim()) ?? 0;
+              if (amt <= 0) return;
+              Navigator.of(ctx).pop();
+              await ApiService.adjustUserWallet(user['id'].toString(), -amt);
+              _load();
+            },
+            child: const Text('- Deduct'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: TruthLensColors.neonEmerald),
+            onPressed: () async {
+              final amt = double.tryParse(amtCtrl.text.trim()) ?? 0;
+              if (amt <= 0) return;
+              Navigator.of(ctx).pop();
+              await ApiService.adjustUserWallet(user['id'].toString(), amt);
+              _load();
+            },
+            child: const Text('+ Add'),
           ),
         ],
       ),
@@ -120,133 +126,218 @@ class _AdminScreenState extends State<AdminScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final stats = (_data?['stats'] as Map<String, dynamic>?) ?? {};
-    final recharges = (_data?['recharges'] as List<dynamic>?) ?? [];
-    final users = (_data?['users'] as List<dynamic>?) ?? [];
-    final alerts = (_data?['alerts'] as List<dynamic>?) ?? [];
+    final stats = (_overview?['stats'] as Map<String, dynamic>?) ?? const {};
+    final users = ((_overview?['users'] as List<dynamic>?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    final recharges = ((_overview?['recharges'] as List<dynamic>?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    final scans = ((_overview?['recent_scans'] as List<dynamic>?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    final alerts = ((_overview?['alerts'] as List<dynamic>?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
 
-    return DefaultTabController(
-      length: 4,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Admin Control Center'),
-          actions: [
-            IconButton(
-              onPressed: _load,
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Refresh',
-            ),
-          ],
-          bottom: TabBar(
-            isScrollable: true,
-            tabs: [
-              const Tab(text: 'Pricing'),
-              Tab(text: 'Recharges (${stats['pending_recharges'] ?? 0})'),
-              Tab(text: 'Users (${users.length})'),
-              Tab(text: 'Flagged (${alerts.length})'),
-            ],
-          ),
+    final query = _searchCtrl.text.trim().toLowerCase();
+    final filteredUsers = users.where((u) {
+      if (query.isEmpty) return true;
+      return (u['email'] ?? '').toString().toLowerCase().contains(query) ||
+          (u['name'] ?? '').toString().toLowerCase().contains(query);
+    }).toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'ADMIN CONTROL CENTER',
+          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 1.0),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
+        actions: [
+          IconButton(onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
+        ],
+        bottom: TabBar(
+          controller: _tabs,
+          isScrollable: true,
+          indicatorColor: TruthLensColors.neonCyan,
+          labelColor: TruthLensColors.neonCyan,
+          unselectedLabelColor: TruthLensColors.textMuted,
+          tabs: [
+            Tab(text: 'Users (${users.length})'),
+            Tab(text: 'Recharges (${stats['pending_recharges'] ?? 0})'),
+            const Tab(text: 'Pricing & OTA'),
+            Tab(text: 'Scans (${scans.length})'),
+            Tab(text: 'Flagged (${alerts.length})'),
+          ],
+        ),
+      ),
+      body: CyberBackground(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator(color: TruthLensColors.neonCyan))
             : _error != null
                 ? Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(_error!, textAlign: TextAlign.center),
-                          const SizedBox(height: 16),
-                          FilledButton(onPressed: _load, child: const Text('Retry')),
-                        ],
+                      child: Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: TruthLensColors.neonRose),
                       ),
                     ),
                   )
-                : TabBarView(
+                : Column(
                     children: [
-                      // Tab 1: Overview & Live Pricing
-                      ListView(
-                        padding: const EdgeInsets.all(16),
-                        children: [
-                          GridView.count(
-                            crossAxisCount: 2,
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            crossAxisSpacing: 10,
-                            mainAxisSpacing: 10,
-                            childAspectRatio: 2.0,
-                            children: [
-                              _statCard('Total Revenue', '₹${stats['total_revenue'] ?? 0}', Colors.greenAccent),
-                              _statCard('Total Users', '${stats['total_users'] ?? 0}', Colors.lightBlueAccent),
-                              _statCard('Questions', '${stats['total_questions'] ?? 0}', Colors.white),
-                              _statCard('Flagged Alerts', '${stats['flagged_alerts'] ?? 0}', Colors.redAccent),
-                            ],
-                          ),
-                          const SizedBox(height: 20),
-                          const Text(
-                            'Live Pricing & UPI Control',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: _priceCtrl,
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              border: OutlineInputBorder(),
-                              labelText: 'Price Per Question (₹)',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: _minCtrl,
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              border: OutlineInputBorder(),
-                              labelText: 'Minimum Recharge (₹)',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: _freeCtrl,
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              border: OutlineInputBorder(),
-                              labelText: 'Free Questions Per User',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: _upiCtrl,
-                            decoration: const InputDecoration(
-                              border: OutlineInputBorder(),
-                              labelText: 'Your UPI ID',
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          SizedBox(
-                            height: 48,
-                            child: FilledButton(
-                              onPressed: _saving ? null : _saveSettings,
-                              child: Text(_saving ? 'Saving...' : 'Save Live Settings'),
-                            ),
-                          ),
-                        ],
+                      // 6 KPI Analytics Strip
+                      SizedBox(
+                        height: 86,
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+                          children: [
+                            _KpiBox('Users', '${stats['total_users'] ?? 0}', TruthLensColors.neonCyan),
+                            _KpiBox('Total Scans', '${stats['total_scans'] ?? stats['total_questions'] ?? 0}', TruthLensColors.neonPurple),
+                            _KpiBox('Revenue', '₹${stats['total_revenue'] ?? 0}', TruthLensColors.neonEmerald),
+                            _KpiBox('Wallets', '₹${stats['active_wallet_balances'] ?? 0}', const Color(0xFF67E8F9)),
+                            _KpiBox('Pending ₹', '${stats['pending_recharges'] ?? 0}', TruthLensColors.neonAmber),
+                            _KpiBox('Flagged', '${stats['flagged_alerts'] ?? 0}', TruthLensColors.neonRose),
+                          ],
+                        ),
                       ),
+                      Expanded(
+                        child: TabBarView(
+                          controller: _tabs,
+                          children: [
+                            // TAB 1: USERS
+                            Column(
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+                                  child: TextField(
+                                    controller: _searchCtrl,
+                                    onChanged: (_) => setState(() {}),
+                                    decoration: const InputDecoration(
+                                      hintText: 'Search Google user by email or name...',
+                                      prefixIcon: Icon(Icons.search_rounded),
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: ListView.builder(
+                                    padding: const EdgeInsets.fromLTRB(14, 4, 14, 24),
+                                    itemCount: filteredUsers.length,
+                                    itemBuilder: (ctx, idx) {
+                                      final u = filteredUsers[idx];
+                                      final banned = u['is_banned'] == true;
+                                      return Padding(
+                                        padding: const EdgeInsets.only(bottom: 10),
+                                        child: GlassCard(
+                                          padding: const EdgeInsets.all(14),
+                                          borderColor: banned
+                                              ? TruthLensColors.neonRose
+                                              : TruthLensColors.borderPurple,
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        Text(
+                                                          (u['email'] ?? '').toString(),
+                                                          style: const TextStyle(
+                                                            fontWeight: FontWeight.w800,
+                                                            fontSize: 13.5,
+                                                          ),
+                                                        ),
+                                                        Text(
+                                                          'Wallet: ₹${u['wallet_balance']} · Qs: ${u['total_questions_asked']} ${u['google_connected'] == true ? '· Google' : ''}',
+                                                          style: const TextStyle(
+                                                            fontSize: 11.5,
+                                                            color: TruthLensColors.textMuted,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(
+                                                        horizontal: 8, vertical: 3),
+                                                    decoration: BoxDecoration(
+                                                      color: banned
+                                                          ? const Color(0x33FB7185)
+                                                          : const Color(0x3334D399),
+                                                      borderRadius: BorderRadius.circular(8),
+                                                    ),
+                                                    child: Text(
+                                                      banned ? 'BLOCKED' : 'ACTIVE',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        fontWeight: FontWeight.w800,
+                                                        color: banned
+                                                            ? TruthLensColors.neonRose
+                                                            : TruthLensColors.neonEmerald,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 10),
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: OutlinedButton.icon(
+                                                      onPressed: () => _openWalletAdjustDialog(u),
+                                                      icon: const Icon(Icons.account_balance_wallet,
+                                                          size: 16),
+                                                      label: const Text('Add / Deduct ₹'),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  OutlinedButton.icon(
+                                                    style: OutlinedButton.styleFrom(
+                                                      foregroundColor: banned
+                                                          ? TruthLensColors.neonEmerald
+                                                          : TruthLensColors.neonRose,
+                                                    ),
+                                                    onPressed: () async {
+                                                      await ApiService.toggleUserBan(
+                                                          u['id'].toString());
+                                                      _load();
+                                                    },
+                                                    icon: Icon(
+                                                      banned ? Icons.lock_open : Icons.block,
+                                                      size: 16,
+                                                    ),
+                                                    label: Text(banned ? 'Unblock' : 'Block'),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
 
-                      // Tab 2: UPI Recharges
-                      recharges.isEmpty
-                          ? const Center(child: Text('Abhi koi recharge request nahi hai.'))
-                          : ListView.separated(
-                              padding: const EdgeInsets.all(16),
+                            // TAB 2: RECHARGES
+                            ListView.builder(
+                              padding: const EdgeInsets.all(14),
                               itemCount: recharges.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
-                              itemBuilder: (_, i) {
-                                final r = recharges[i] as Map<String, dynamic>;
-                                final isPending = r['status'] == 'pending';
-                                return Card(
-                                  child: Padding(
+                              itemBuilder: (ctx, idx) {
+                                final r = recharges[idx];
+                                final pending = r['status'] == 'pending';
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: GlassCard(
                                     padding: const EdgeInsets.all(14),
+                                    borderColor: pending
+                                        ? TruthLensColors.neonAmber
+                                        : TruthLensColors.borderCyan,
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
@@ -255,16 +346,16 @@ class _AdminScreenState extends State<AdminScreen> {
                                           children: [
                                             Expanded(
                                               child: Text(
-                                                '${r['user_email']}',
-                                                style: const TextStyle(fontWeight: FontWeight.w600),
+                                                (r['user_email'] ?? '').toString(),
+                                                style: const TextStyle(fontWeight: FontWeight.w800),
                                               ),
                                             ),
                                             Text(
                                               '₹${r['amount']}',
                                               style: const TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.w700,
-                                                color: Colors.greenAccent,
+                                                fontSize: 17,
+                                                fontWeight: FontWeight.w900,
+                                                color: TruthLensColors.neonEmerald,
                                               ),
                                             ),
                                           ],
@@ -272,26 +363,44 @@ class _AdminScreenState extends State<AdminScreen> {
                                         const SizedBox(height: 4),
                                         Text(
                                           'UTR: ${r['utr']} · Status: ${r['status']}',
-                                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: TruthLensColors.textMuted,
+                                          ),
                                         ),
-                                        if (isPending) ...[
+                                        if (pending) ...[
                                           const SizedBox(height: 10),
                                           Row(
                                             children: [
-                                              FilledButton(
-                                                onPressed: () => _runAction(
-                                                  () => widget.apiService.handleRechargeAction('${r['id']}', 'approve'),
-                                                  'Recharge Approved!',
+                                              Expanded(
+                                                child: FilledButton.icon(
+                                                  style: FilledButton.styleFrom(
+                                                    backgroundColor: TruthLensColors.neonEmerald,
+                                                    foregroundColor: const Color(0xFF040712),
+                                                  ),
+                                                  onPressed: () async {
+                                                    await ApiService.handleRecharge(
+                                                        r['id'].toString(), 'approve');
+                                                    _load();
+                                                  },
+                                                  icon: const Icon(Icons.check, size: 18),
+                                                  label: const Text('Approve'),
                                                 ),
-                                                child: const Text('Approve'),
                                               ),
                                               const SizedBox(width: 8),
-                                              OutlinedButton(
-                                                onPressed: () => _runAction(
-                                                  () => widget.apiService.handleRechargeAction('${r['id']}', 'reject'),
-                                                  'Recharge Rejected',
+                                              Expanded(
+                                                child: OutlinedButton.icon(
+                                                  style: OutlinedButton.styleFrom(
+                                                    foregroundColor: TruthLensColors.neonRose,
+                                                  ),
+                                                  onPressed: () async {
+                                                    await ApiService.handleRecharge(
+                                                        r['id'].toString(), 'reject');
+                                                    _load();
+                                                  },
+                                                  icon: const Icon(Icons.close, size: 18),
+                                                  label: const Text('Reject'),
                                                 ),
-                                                child: const Text('Reject'),
                                               ),
                                             ],
                                           ),
@@ -303,93 +412,174 @@ class _AdminScreenState extends State<AdminScreen> {
                               },
                             ),
 
-                      // Tab 3: Users
-                      ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: users.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (_, i) {
-                          final u = users[i] as Map<String, dynamic>;
-                          final isBanned = (u['is_banned'] as bool?) ?? false;
-                          return Card(
-                            child: Padding(
+                            // TAB 3: PRICING & OTA
+                            ListView(
                               padding: const EdgeInsets.all(14),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '${u['email']}',
-                                    style: const TextStyle(fontWeight: FontWeight.w600),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Wallet: ₹${u['wallet_balance']} · Questions: ${u['total_questions_asked']}${isBanned ? ' · BANNED' : ''}',
-                                    style: const TextStyle(fontSize: 12, color: Colors.white70),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Row(
+                              children: [
+                                GlassCard(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
                                     children: [
-                                      FilledButton.tonal(
-                                        onPressed: () => _runAction(
-                                          () => widget.apiService.adjustUserWallet('${u['id']}', 50),
-                                          '+₹50 added to wallet',
-                                        ),
-                                        child: const Text('+₹50'),
+                                      const Text(
+                                        'Live Pricing & UPI Settings',
+                                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                                       ),
-                                      const SizedBox(width: 8),
-                                      OutlinedButton(
-                                        onPressed: () => _runAction(
-                                          () => widget.apiService.toggleUserBan('${u['id']}'),
-                                          isBanned ? 'User Unbanned' : 'User Banned',
-                                        ),
-                                        child: Text(isBanned ? 'Unban' : 'Ban'),
+                                      const SizedBox(height: 12),
+                                      TextField(
+                                        controller: _priceCtrl,
+                                        keyboardType: TextInputType.number,
+                                        decoration: const InputDecoration(
+                                            labelText: 'Price Per Question (₹)'),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      TextField(
+                                        controller: _minRecCtrl,
+                                        keyboardType: TextInputType.number,
+                                        decoration: const InputDecoration(
+                                            labelText: 'Minimum Recharge (₹)'),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      TextField(
+                                        controller: _freeCtrl,
+                                        keyboardType: TextInputType.number,
+                                        decoration: const InputDecoration(
+                                            labelText: 'Free Trial Questions'),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      TextField(
+                                        controller: _upiCtrl,
+                                        decoration: const InputDecoration(labelText: 'Your UPI ID'),
+                                      ),
+                                      const SizedBox(height: 14),
+                                      NeonGradientButton(
+                                        label: 'Save Pricing & UPI Live',
+                                        icon: Icons.save_rounded,
+                                        onPressed: () async {
+                                          await ApiService.updateAdminSettings(
+                                            pricePerQuestion: int.tryParse(_priceCtrl.text) ?? 10,
+                                            minRecharge: int.tryParse(_minRecCtrl.text) ?? 50,
+                                            freeQuestions: int.tryParse(_freeCtrl.text) ?? 3,
+                                            upiId: _upiCtrl.text,
+                                          );
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(
+                                                content: Text('Pricing & UPI updated live!')),
+                                          );
+                                          _load();
+                                        },
                                       ),
                                     ],
                                   ),
-                                ],
-                              ),
+                                ),
+                                const SizedBox(height: 14),
+                                GlassCard(
+                                  borderColor: TruthLensColors.borderCyan,
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      const Text(
+                                        'Over-The-Air (OTA) App Push',
+                                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      const Text(
+                                        'No APK rebuild needed — changes reflect immediately on all phones.',
+                                        style: TextStyle(
+                                            fontSize: 11.5, color: TruthLensColors.textMuted),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      TextField(
+                                        controller: _otaVersionCtrl,
+                                        decoration:
+                                            const InputDecoration(labelText: 'Live App Version'),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      TextField(
+                                        controller: _otaMaintCtrl,
+                                        decoration: const InputDecoration(
+                                            labelText: 'Notice / Maintenance Banner (optional)'),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      TextField(
+                                        controller: _otaQuestionsCtrl,
+                                        maxLines: 3,
+                                        decoration: const InputDecoration(
+                                            labelText: 'Baseline Questions (1 per line)'),
+                                      ),
+                                      const SizedBox(height: 14),
+                                      NeonGradientButton(
+                                        label: 'Push OTA Config Live',
+                                        icon: Icons.cloud_upload_rounded,
+                                        onPressed: () async {
+                                          final qs = _otaQuestionsCtrl.text
+                                              .split('\n')
+                                              .map((s) => s.trim())
+                                              .where((s) => s.isNotEmpty)
+                                              .toList();
+                                          await ApiService.updateOtaConfig(
+                                            appVersion: _otaVersionCtrl.text,
+                                            maintenanceMessage: _otaMaintCtrl.text,
+                                            baselineQuestions: qs,
+                                          );
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(
+                                                content: Text('OTA update pushed to all apps!')),
+                                          );
+                                          _load();
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
-                          );
-                        },
-                      ),
 
-                      // Tab 4: Flagged Alerts
-                      alerts.isEmpty
-                          ? const Center(child: Text('Koi flagged unsafe alert nahi hai.'))
-                          : ListView.separated(
-                              padding: const EdgeInsets.all(16),
-                              itemCount: alerts.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
-                              itemBuilder: (_, i) {
-                                final a = alerts[i] as Map<String, dynamic>;
-                                final keywords = (a['matched_keywords'] as List<dynamic>?)?.join(', ') ?? '';
-                                return Card(
-                                  color: const Color(0xFF2B1218),
-                                  child: Padding(
+                            // TAB 4: RECENT SCANS
+                            ListView.builder(
+                              padding: const EdgeInsets.all(14),
+                              itemCount: scans.length,
+                              itemBuilder: (ctx, idx) {
+                                final sc = scans[idx];
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: GlassCard(
                                     padding: const EdgeInsets.all(14),
+                                    borderColor: TruthLensColors.borderCyan,
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Text(
-                                          '🚨 ${a['user_email']}',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w700,
-                                            color: Colors.redAccent,
-                                          ),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                (sc['user_email'] ?? '').toString(),
+                                                style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: TruthLensColors.neonCyan,
+                                                    fontWeight: FontWeight.w700),
+                                              ),
+                                            ),
+                                            Text(
+                                              '${sc['consistency_score']}%',
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.w900,
+                                                  color: TruthLensColors.neonEmerald),
+                                            ),
+                                          ],
                                         ),
-                                        const SizedBox(height: 6),
-                                        Text('${a['question_text']}'),
-                                        if (keywords.isNotEmpty) ...[
-                                          const SizedBox(height: 6),
-                                          Text(
-                                            'Matched: $keywords',
-                                            style: const TextStyle(fontSize: 12, color: Colors.amberAccent),
-                                          ),
-                                        ],
                                         const SizedBox(height: 4),
-                                        const Text(
-                                          'Video playback ke liye web Admin Panel (/admin) kholein.',
-                                          style: TextStyle(fontSize: 11, color: Colors.white60),
+                                        Text(
+                                          (sc['question'] ?? sc['title'] ?? '').toString(),
+                                          style: const TextStyle(fontWeight: FontWeight.w700),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          (sc['verdict'] ?? '').toString(),
+                                          style: const TextStyle(
+                                              fontSize: 12, color: TruthLensColors.textMuted),
                                         ),
                                       ],
                                     ),
@@ -397,8 +587,100 @@ class _AdminScreenState extends State<AdminScreen> {
                                 );
                               },
                             ),
+
+                            // TAB 5: FLAGGED ALERTS
+                            ListView.builder(
+                              padding: const EdgeInsets.all(14),
+                              itemCount: alerts.length,
+                              itemBuilder: (ctx, idx) {
+                                final a = alerts[idx];
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: GlassCard(
+                                    padding: const EdgeInsets.all(14),
+                                    borderColor: TruthLensColors.neonRose,
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          (a['user_email'] ?? '').toString(),
+                                          style: const TextStyle(
+                                            color: TruthLensColors.neonRose,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          (a['question_text'] ?? '').toString(),
+                                          style: const TextStyle(fontWeight: FontWeight.w700),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Keywords: ${((a['matched_keywords'] as List?) ?? const []).join(", ")}',
+                                          style: const TextStyle(
+                                            fontSize: 11.5,
+                                            color: Color(0xFFFDA4AF),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
+      ),
+    );
+  }
+}
+
+class _KpiBox extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+
+  const _KpiBox(this.label, this.value, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 118,
+      margin: const EdgeInsets.only(right: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: TruthLensColors.surfaceGlass,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: Color.fromRGBO(color.red, color.green, color.blue, 0.45),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 9.5,
+              fontWeight: FontWeight.w700,
+              color: TruthLensColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -9,20 +9,28 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./data/app.db"
     data_dir: str = "./data"
-    baseline_seconds: float = 25.0
+    baseline_seconds: float = 10.0
     window_seconds: float = 2.0
     min_windows_for_score: int = 4
     allowed_origins: str = "*"
 
-    jwt_secret: str = "truth-lens-dev-secret-change-in-prod"
-    google_client_id: str = ""
+    # Auth & Admin
+    jwt_secret: str = "truth-lens-pro-super-secret-9988776655"
+    google_client_id: str = "1080598305429-pqqjgibdjtlefnem4mbrqqk995h66ql1.apps.googleusercontent.com"
     admin_emails: str = "akashtyagi534@gmail.com"
-    admin_password: str = "admin123"
+    admin_password: str = "AkashAdmin@2026"
 
+    # Pricing & Wallet defaults
     default_price_per_question: int = 10
     default_min_recharge: int = 50
     default_free_questions: int = 3
-    default_upi_id: str = "yourupi@oksbi"
+    default_upi_id: str = "akashtyagi534@oksbi"
+
+    # OTA & Forensic Engine defaults
+    app_version: str = "4.0.0"
+    maintenance_message: str = ""
+    enable_whisper: bool = False
+    whisper_model_size: str = "tiny"
 
     @property
     def origins(self) -> list[str]:

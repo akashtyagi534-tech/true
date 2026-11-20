@@ -54,10 +54,27 @@ async def verify_google_id_token(id_token: str) -> dict:
             params={"id_token": id_token},
         )
     if res.status_code != 200:
-        raise HTTPException(status_code=401, detail="Invalid Google token")
+        raise HTTPException(status_code=401, detail="Invalid Google ID token")
     info = res.json()
-    if settings.google_client_id and info.get("aud") != settings.google_client_id:
-        raise HTTPException(status_code=401, detail="Google client ID mismatch")
+    if settings.google_client_id:
+        allowed = {c.strip() for c in settings.google_client_id.split(",") if c.strip()}
+        if info.get("aud") not in allowed and info.get("azp") not in allowed:
+            raise HTTPException(status_code=401, detail="Google client ID mismatch")
+    if not info.get("email"):
+        raise HTTPException(status_code=401, detail="Google account email missing")
+    return info
+
+
+async def verify_google_access_token(access_token: str) -> dict:
+    """Verify Google OAuth2 access_token from Flutter google_sign_in mobile plugin."""
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        res = await client.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if res.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google access token")
+    info = res.json()
     if not info.get("email"):
         raise HTTPException(status_code=401, detail="Google account email missing")
     return info

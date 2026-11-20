@@ -47,11 +47,16 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate Android Folder & Permissions
+      - name: Generate Android Folder, Permissions & Neon Launcher Icon
         working-directory: ./flutter_app
         run: |
           flutter create . --platforms=android
-          sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.CAMERA"\/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <application/' android/app/src/main/AndroidManifest.xml
+          sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.CAMERA"\/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <uses-permission android:name="android.permission.FLASHLIGHT"\/>\n    <application/' android/app/src/main/AndroidManifest.xml
+          sed -i 's/android:label="[^"]*"/android:label="Truth Lens Pro"/' android/app/src/main/AndroidManifest.xml
+          python3 tool/generate_launcher_icons.py
+          if [ -f google-services.json ]; then
+            cp google-services.json android/app/google-services.json
+          fi
 
       - name: Get Flutter Dependencies
         working-directory: ./flutter_app
@@ -70,8 +75,8 @@ jobs:
             gh release upload latest TruthLensPro-release.apk --clobber
           else
             gh release create latest TruthLensPro-release.apk \
-              --title "Truth Lens Pro (Latest Android APK)" \
-              --notes "Direct Android APK download — no ZIP extraction required."
+              --title "Truth Lens Pro v4 (Latest Android APK)" \
+              --notes "Direct Android APK download — Neon AI UI, Flashlight Torch, Hindi Voice Verdict, Google Sign-In + Wallet, 21-Point Forensic Lab & OTA Engine."
           fi
 
       - name: Upload APK Artifact

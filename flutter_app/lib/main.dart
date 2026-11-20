@@ -1,26 +1,24 @@
 import 'package:flutter/material.dart';
-import 'recording_screen.dart';
+import 'api_service.dart';
+import 'home_screen.dart';
+import 'theme.dart';
 
-void main() {
-  runApp(const TruthVerifyApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await ApiService.init();
+  runApp(const TruthLensApp());
 }
 
-class TruthVerifyApp extends StatelessWidget {
-  const TruthVerifyApp({super.key});
+class TruthLensApp extends StatelessWidget {
+  const TruthLensApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Truth Lens Pro',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1D4ED8),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
-      home: const RecordingScreen(),
+      theme: buildTruthLensTheme(),
+      home: const HomeScreen(),
     );
   }
 }

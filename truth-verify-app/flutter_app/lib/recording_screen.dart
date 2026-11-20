@@ -1,60 +1,74 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'admin_screen.dart';
+
 import 'api_service.dart';
 import 'report_screen.dart';
+import 'theme.dart';
+
+enum ScanStage {
+  baselineReady,
+  baselineRecording,
+  targetReady,
+  targetRecording,
+  analyzing,
+}
 
 class RecordingScreen extends StatefulWidget {
-  const RecordingScreen({super.key});
+  final bool twoStageMode;
+  final OtaAppConfig otaConfig;
+
+  const RecordingScreen({
+    super.key,
+    required this.twoStageMode,
+    required this.otaConfig,
+  });
 
   @override
   State<RecordingScreen> createState() => _RecordingScreenState();
 }
 
 class _RecordingScreenState extends State<RecordingScreen> {
-  final ApiService _apiService = ApiService();
-  final TextEditingController _questionController = TextEditingController();
-
-  CameraController? _controller;
   List<CameraDescription> _cameras = [];
-  int _selectedCameraIndex = 0;
+  CameraController? _controller;
+  int _cameraIndex = 0;
 
-  bool _isInitializing = true;
-  bool _isRecording = false;
-  bool _isUploading = false;
-  int _elapsedSeconds = 0;
+  bool _initializing = true;
+  bool _torchOn = false;
+  String? _error;
+
+  late ScanStage _stage;
   Timer? _timer;
-  String? _errorMessage;
+  int _elapsedSec = 0;
+
+  File? _baselineFile;
+  final TextEditingController _questionCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _boot();
-  }
-
-  Future<void> _boot() async {
-    await _apiService.init();
-    if (mounted) setState(() {});
-    await _initCamera();
+    _stage = widget.twoStageMode ? ScanStage.baselineReady : ScanStage.targetReady;
+    _initCamera();
   }
 
   Future<void> _initCamera() async {
     setState(() {
-      _isInitializing = true;
-      _errorMessage = null;
+      _initializing = true;
+      _error = null;
     });
 
-    final cameraStatus = await Permission.camera.request();
+    final camStatus = await Permission.camera.request();
     final micStatus = await Permission.microphone.request();
-
-    if (!cameraStatus.isGranted || !micStatus.isGranted) {
-      setState(() {
-        _isInitializing = false;
-        _errorMessage = 'Camera and microphone permissions are required.';
-      });
+    if (!camStatus.isGranted || !micStatus.isGranted) {
+      if (mounted) {
+        setState(() {
+          _initializing = false;
+          _error = 'Camera aur Microphone permission zaroori hai.';
+        });
+      }
       return;
     }
 
@@ -62,564 +76,511 @@ class _RecordingScreenState extends State<RecordingScreen> {
       _cameras = await availableCameras();
       if (_cameras.isEmpty) {
         setState(() {
-          _isInitializing = false;
-          _errorMessage = 'No camera device found.';
+          _initializing = false;
+          _error = 'Is phone mein camera nahi mila.';
         });
         return;
       }
-
-      _selectedCameraIndex = _cameras.indexWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
-      );
-      if (_selectedCameraIndex < 0) _selectedCameraIndex = 0;
-
-      await _startCameraController(_cameras[_selectedCameraIndex]);
+      // Prefer back camera if available (supports Flashlight Torch), fallback to index 0
+      final backIdx = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
+      _cameraIndex = backIdx >= 0 ? backIdx : 0;
+      await _startController(_cameras[_cameraIndex]);
     } catch (e) {
-      setState(() {
-        _isInitializing = false;
-        _errorMessage = 'Failed to initialize camera: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _initializing = false;
+          _error = 'Camera start nahi ho paya: $e';
+        });
+      }
     }
   }
 
-  Future<void> _startCameraController(CameraDescription camera) async {
-    await _controller?.dispose();
-    final controller = CameraController(
-      camera,
-      ResolutionPreset.low,
+  Future<void> _startController(CameraDescription desc) async {
+    final old = _controller;
+    _controller = null;
+    await old?.dispose();
+
+    final ctrl = CameraController(
+      desc,
+      ResolutionPreset.medium,
       enableAudio: true,
     );
-    await controller.initialize();
-    if (!mounted) return;
+    await ctrl.initialize();
+    _torchOn = false;
+    try {
+      await ctrl.setFlashMode(FlashMode.off);
+    } catch (_) {
+      // Some lenses do not support flash controls.
+    }
+
+    if (!mounted) {
+      await ctrl.dispose();
+      return;
+    }
     setState(() {
-      _controller = controller;
-      _isInitializing = false;
+      _controller = ctrl;
+      _initializing = false;
     });
   }
 
-  Future<void> _toggleCamera() async {
-    if (_cameras.length < 2 || _isRecording || _isUploading) return;
-    _selectedCameraIndex = (_selectedCameraIndex + 1) % _cameras.length;
-    await _startCameraController(_cameras[_selectedCameraIndex]);
+  Future<void> _switchCamera() async {
+    if (_cameras.length < 2 || _isRecording || _stage == ScanStage.analyzing) return;
+    setState(() => _initializing = true);
+    _cameraIndex = (_cameraIndex + 1) % _cameras.length;
+    await _startController(_cameras[_cameraIndex]);
   }
 
-  Future<void> _openServerSettings() async {
-    final textController = TextEditingController(text: _apiService.baseUrl);
-    String? statusText;
-    bool checking = false;
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogCtx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            return AlertDialog(
-              title: const Text('Railway Server URL'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Railway → Networking → Generate Domain se mila apna live URL paste karein (khali chhodne par On-Device Mode chalega):',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: textController,
-                    keyboardType: TextInputType.url,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: 'https://your-app.up.railway.app',
-                    ),
-                  ),
-                  if (statusText != null) ...[
-                    const SizedBox(height: 10),
-                    Text(statusText!, style: const TextStyle(fontSize: 12)),
-                  ],
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogCtx).pop(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: checking
-                      ? null
-                      : () async {
-                          setModalState(() {
-                            checking = true;
-                            statusText = 'Checking /health...';
-                          });
-                          await _apiService.saveUrl(textController.text);
-                          if (_apiService.baseUrl.isEmpty) {
-                            if (dialogCtx.mounted) Navigator.of(dialogCtx).pop();
-                            if (mounted) setState(() {});
-                            return;
-                          }
-                          try {
-                            final ok = await _apiService.checkHealth();
-                            if (ok) {
-                              await _apiService.fetchPublicConfig();
-                              if (dialogCtx.mounted) Navigator.of(dialogCtx).pop();
-                              if (mounted) {
-                                setState(() {});
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Railway Connected: ${_apiService.baseUrl}')),
-                                );
-                              }
-                            } else {
-                              setModalState(() {
-                                checking = false;
-                                statusText = 'Saved, lekin /health 200 OK nahi mila. Railway Root Directory (/backend) check karein.';
-                              });
-                            }
-                          } catch (e) {
-                            setModalState(() {
-                              checking = false;
-                              statusText = 'Saved, server unreachable: $e';
-                            });
-                          }
-                        },
-                  child: Text(checking ? 'Checking...' : 'Test & Save'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _openAccountDialog() async {
-    final emailCtrl = TextEditingController(text: _apiService.currentUser?.email ?? '');
-    final nameCtrl = TextEditingController(text: _apiService.currentUser?.name ?? '');
-    final passCtrl = TextEditingController();
-    String? err;
-    bool busy = false;
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogCtx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            final user = _apiService.currentUser;
-            if (user != null) {
-              return AlertDialog(
-                title: Text(user.name),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(user.email, style: const TextStyle(fontSize: 13)),
-                    const SizedBox(height: 12),
-                    Text('Free Questions Left: ${user.freeQuestionsLeft}'),
-                    Text('Wallet Balance: ₹${user.walletBalance.toStringAsFixed(0)}'),
-                    if (user.isAdmin)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: FilledButton.tonalIcon(
-                          onPressed: () {
-                            Navigator.of(dialogCtx).pop();
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => AdminScreen(apiService: _apiService),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.admin_panel_settings, color: Colors.amber),
-                          label: const Text('Open Admin Panel'),
-                        ),
-                      ),
-                  ],
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () async {
-                      await _apiService.logout();
-                      if (dialogCtx.mounted) Navigator.of(dialogCtx).pop();
-                      if (mounted) setState(() {});
-                    },
-                    child: const Text('Logout'),
-                  ),
-                  FilledButton(
-                    onPressed: () {
-                      Navigator.of(dialogCtx).pop();
-                      _openRechargeDialog();
-                    },
-                    child: const Text('+ Recharge'),
-                  ),
-                ],
-              );
-            }
-
-            return AlertDialog(
-              title: const Text('Truth Lens Login'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Pehle ${_apiService.freeQuestionsDefault} sawaal FREE, phir ₹${_apiService.pricePerQuestion}/sawaal.',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: emailCtrl,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Email'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: nameCtrl,
-                    decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Name'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: passCtrl,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Admin Password (optional)',
-                    ),
-                  ),
-                  if (err != null) ...[
-                    const SizedBox(height: 8),
-                    Text(err!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-                  ],
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogCtx).pop(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: busy
-                      ? null
-                      : () async {
-                          setModalState(() {
-                            busy = true;
-                            err = null;
-                          });
-                          try {
-                            await _apiService.devLogin(
-                              email: emailCtrl.text,
-                              name: nameCtrl.text,
-                              password: passCtrl.text,
-                            );
-                            if (dialogCtx.mounted) Navigator.of(dialogCtx).pop();
-                            if (mounted) setState(() {});
-                          } catch (e) {
-                            setModalState(() {
-                              busy = false;
-                              err = '$e';
-                            });
-                          }
-                        },
-                  child: Text(busy ? 'Signing in...' : 'Login'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _openRechargeDialog() async {
-    final amtCtrl = TextEditingController(text: '${_apiService.minRecharge}');
-    final utrCtrl = TextEditingController();
-    String? msg;
-    bool busy = false;
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogCtx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            return AlertDialog(
-              title: const Text('Wallet Recharge'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Min ₹${_apiService.minRecharge} · UPI ID: ${_apiService.upiId}',
-                    style: const TextStyle(fontSize: 13, color: Colors.lightBlueAccent),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: amtCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Amount (₹)'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: utrCtrl,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'UPI Reference / UTR Number',
-                    ),
-                  ),
-                  if (msg != null) ...[
-                    const SizedBox(height: 8),
-                    Text(msg!, style: const TextStyle(fontSize: 12)),
-                  ],
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogCtx).pop(),
-                  child: const Text('Close'),
-                ),
-                FilledButton(
-                  onPressed: busy
-                      ? null
-                      : () async {
-                          setModalState(() => busy = true);
-                          try {
-                            final res = await _apiService.requestRecharge(
-                              amount: double.tryParse(amtCtrl.text) ?? 0,
-                              utr: utrCtrl.text,
-                            );
-                            setModalState(() {
-                              busy = false;
-                              msg = res;
-                            });
-                          } catch (e) {
-                            setModalState(() {
-                              busy = false;
-                              msg = '$e';
-                            });
-                          }
-                        },
-                  child: Text(busy ? 'Sending...' : 'Submit UTR'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _toggleRecording() async {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized || _isUploading) {
-      return;
-    }
-
-    if (_isRecording) {
-      _timer?.cancel();
-      final recordedDuration = _elapsedSeconds;
-      final XFile recorded = await controller.stopVideoRecording();
-      setState(() {
-        _isRecording = false;
-        _isUploading = true;
-      });
-
-      try {
-        final report = await _apiService.analyzeVideo(
-          File(recorded.path),
-          question: _questionController.text.trim(),
-          durationSeconds: recordedDuration,
-        );
-        if (!mounted) return;
-        setState(() {}); // refresh wallet pill if updated
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ReportScreen(report: report),
-          ),
-        );
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 7),
-            content: Text('$e'),
-            action: SnackBarAction(
-              label: 'Recharge',
-              onPressed: _openRechargeDialog,
-            ),
-          ),
-        );
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isUploading = false;
-            _elapsedSeconds = 0;
-          });
-        }
+  Future<void> _toggleFlashlight() async {
+    final ctrl = _controller;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
+    final bool next = !_torchOn;
+    try {
+      await ctrl.setFlashMode(next ? FlashMode.torch : FlashMode.off);
+      if (mounted) {
+        setState(() => _torchOn = next);
       }
-    } else {
-      await controller.startVideoRecording();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Is camera lens par Flashlight supported nahi hai — Rear Camera par switch karein!'),
+        ),
+      );
+    }
+  }
+
+  bool get _isRecording =>
+      _stage == ScanStage.baselineRecording || _stage == ScanStage.targetRecording;
+
+  int get _maxDurationSec =>
+      _stage == ScanStage.baselineRecording ? widget.otaConfig.baselineSeconds : 30;
+
+  Future<void> _startRecording() async {
+    final ctrl = _controller;
+    if (ctrl == null || !ctrl.value.isInitialized || _isRecording) return;
+
+    try {
+      await ctrl.startVideoRecording();
+      final bool isBaseline = _stage == ScanStage.baselineReady;
       setState(() {
-        _isRecording = true;
-        _elapsedSeconds = 0;
+        _elapsedSec = 0;
+        _stage = isBaseline ? ScanStage.baselineRecording : ScanStage.targetRecording;
       });
-      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (mounted) {
-          setState(() => _elapsedSeconds++);
+
+      _timer?.cancel();
+      _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (!mounted) {
+          t.cancel();
+          return;
+        }
+        setState(() => _elapsedSec += 1);
+        if (_elapsedSec >= _maxDurationSec) {
+          _stopRecording();
         }
       });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Recording start error: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    final ctrl = _controller;
+    if (ctrl == null || !_isRecording) return;
+    _timer?.cancel();
+
+    try {
+      final XFile recorded = await ctrl.stopVideoRecording();
+      final File videoFile = File(recorded.path);
+
+      if (_stage == ScanStage.baselineRecording) {
+        if (!mounted) return;
+        setState(() {
+          _baselineFile = videoFile;
+          _elapsedSec = 0;
+          _stage = ScanStage.targetReady;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Stage 1 Baseline Calibrated! Ab Stage 2 Target sawaal record karein.'),
+          ),
+        );
+        return;
+      }
+
+      // Stage 2 Target recorded -> analyze!
+      if (!mounted) return;
+      setState(() => _stage = ScanStage.analyzing);
+
+      // Turn off torch once recording completes
+      if (_torchOn) {
+        try {
+          await ctrl.setFlashMode(FlashMode.off);
+          _torchOn = false;
+        } catch (_) {}
+      }
+
+      final report = await ApiService.analyzeSession(
+        targetVideo: videoFile,
+        baselineVideo: _baselineFile,
+        question: _questionCtrl.text.trim(),
+      );
+
+      if (!mounted) return;
+      setState(() => _stage = widget.twoStageMode ? ScanStage.baselineReady : ScanStage.targetReady);
+      _baselineFile = null;
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => ReportScreen(report: report)),
+      );
+    } on LowBalanceException catch (e) {
+      if (!mounted) return;
+      setState(() => _stage = ScanStage.targetReady);
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF0E1630),
+          title: const Text('Wallet Balance Kam Hai'),
+          content: Text(e.message),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                Navigator.of(context).pop();
+              },
+              child: const Text('Recharge Wallet'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _stage = ScanStage.targetReady);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Analysis failed: $e')),
+      );
     }
   }
 
   @override
   void dispose() {
     _timer?.cancel();
-    _questionController.dispose();
+    _questionCtrl.dispose();
     _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final user = _apiService.currentUser;
+    final bool isBaselinePhase =
+        _stage == ScanStage.baselineReady || _stage == ScanStage.baselineRecording;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Truth Lens Pro'),
-        actions: [
-          if (user != null && user.isAdmin)
-            IconButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => AdminScreen(apiService: _apiService),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.admin_panel_settings, color: Colors.amber),
-              tooltip: 'Admin Panel',
-            ),
-          if (user != null)
-            TextButton(
-              onPressed: _openAccountDialog,
-              child: Text(
-                'F:${user.freeQuestionsLeft} · ₹${user.walletBalance.toStringAsFixed(0)}',
-                style: const TextStyle(fontWeight: FontWeight.w700),
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Live Camera Feed
+          if (_initializing)
+            const Center(
+              child: CircularProgressIndicator(color: TruthLensColors.neonCyan),
+            )
+          else if (_error != null)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: TruthLensColors.neonRose, fontSize: 15),
+                ),
               ),
             )
-          else
-            IconButton(
-              onPressed: _openAccountDialog,
-              icon: const Icon(Icons.person_outline),
-              tooltip: 'Login / Wallet',
+          else if (_controller != null && _controller!.value.isInitialized)
+            Center(child: CameraPreview(_controller!)),
+
+          // Subtle cyber targeting frame
+          IgnorePointer(
+            child: Center(
+              child: Container(
+                width: 240,
+                height: 290,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(
+                    color: _isRecording
+                        ? TruthLensColors.neonRose
+                        : TruthLensColors.borderCyan,
+                    width: 2,
+                  ),
+                ),
+              ),
             ),
-          IconButton(
-            onPressed: _openServerSettings,
-            icon: Icon(
-              Icons.dns_outlined,
-              color: _apiService.baseUrl.isNotEmpty ? Colors.lightGreenAccent : null,
-            ),
-            tooltip: 'Railway Server URL',
           ),
-          if (_cameras.length > 1)
-            IconButton(
-              onPressed: _toggleCamera,
-              icon: const Icon(Icons.cameraswitch_outlined),
-              tooltip: 'Switch camera',
-            ),
-        ],
-      ),
-      body: _isInitializing
-          ? const Center(child: CircularProgressIndicator())
-          : _errorMessage != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
+
+          // Top HUD Bar (Back, Stage badge, Flashlight Torch, Camera Switch)
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
                       children: [
-                        Text(_errorMessage!, textAlign: TextAlign.center),
-                        const SizedBox(height: 16),
-                        FilledButton(
-                          onPressed: _initCamera,
-                          child: const Text('Retry Permissions'),
+                        _HudCircleButton(
+                          icon: Icons.arrow_back_rounded,
+                          tooltip: 'Back',
+                          onTap: () => Navigator.of(context).pop(),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xBB060B1D),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: _isRecording
+                                    ? TruthLensColors.neonRose
+                                    : TruthLensColors.borderCyan,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  _isRecording ? Icons.fiber_manual_record : Icons.visibility,
+                                  color: _isRecording
+                                      ? TruthLensColors.neonRose
+                                      : TruthLensColors.neonCyan,
+                                  size: 14,
+                                ),
+                                const SizedBox(width: 6),
+                                Flexible(
+                                  child: Text(
+                                    _isRecording
+                                        ? 'REC · ${_elapsedSec}s / ${_maxDurationSec}s'
+                                        : (isBaselinePhase
+                                            ? 'STAGE 1 · BASELINE (${widget.otaConfig.baselineSeconds}s)'
+                                            : 'STAGE 2 · TARGET SCAN'),
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        // FLASHLIGHT TORCH TOGGLE
+                        _HudCircleButton(
+                          icon: _torchOn ? Icons.flashlight_on_rounded : Icons.flashlight_off_rounded,
+                          tooltip: _torchOn ? 'Turn Flashlight OFF' : 'Turn Flashlight ON',
+                          active: _torchOn,
+                          onTap: _toggleFlashlight,
+                        ),
+                        const SizedBox(width: 8),
+                        _HudCircleButton(
+                          icon: Icons.cameraswitch_rounded,
+                          tooltip: 'Switch Camera',
+                          onTap: _switchCamera,
                         ),
                       ],
                     ),
-                  ),
-                )
-              : Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                      child: TextField(
-                        controller: _questionController,
-                        decoration: InputDecoration(
-                          isDense: true,
-                          border: const OutlineInputBorder(),
-                          hintText: 'Sawaal likhein (e.g. Kal shaam 6 baje kahan the?)',
-                          suffixIcon: _apiService.baseUrl.isEmpty
-                              ? TextButton(
-                                  onPressed: _openServerSettings,
-                                  child: const Text('Local'),
-                                )
-                              : null,
-                        ),
+                    const SizedBox(height: 8),
+                    // Visible Consent Banner
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xBB071126),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0x5534D399)),
                       ),
-                    ),
-                    Expanded(
-                      child: Stack(
-                        fit: StackFit.expand,
+                      child: const Row(
                         children: [
-                          if (_controller != null) CameraPreview(_controller!),
-                          if (_isRecording)
-                            Positioned(
-                              top: 16,
-                              left: 16,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade700,
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  'REC ${_elapsedSeconds}s',
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                                ),
-                              ),
+                          Icon(Icons.verified_user, size: 14, color: TruthLensColors.neonEmerald),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'CONSENT-BASED SCANNER ACTIVE · Visible Recording & Mic ON',
+                              style: TextStyle(fontSize: 10.5, color: Color(0xFFD1FAE5)),
                             ),
-                          if (_isUploading)
-                            Container(
-                              color: Colors.black54,
-                              child: const Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    CircularProgressIndicator(color: Colors.white),
-                                    SizedBox(height: 16),
-                                    Text(
-                                      'Analyzing video and audio signals...',
-                                      style: TextStyle(color: Colors.white, fontSize: 15),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: SizedBox(
-                          width: double.infinity,
-                          height: 52,
-                          child: FilledButton.icon(
-                            onPressed: _isUploading ? null : _toggleRecording,
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _isRecording ? Colors.red.shade700 : const Color(0xFF1D4ED8),
-                            ),
-                            icon: Icon(_isRecording ? Icons.stop : Icons.fiber_manual_record),
-                            label: Text(_isRecording ? 'Stop & Analyze' : 'Start Recording'),
                           ),
-                        ),
+                        ],
                       ),
                     ),
                   ],
                 ),
+              ),
+            ),
+          ),
+
+          // Bottom Control Glass Deck
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: GlassCard(
+                  padding: const EdgeInsets.all(14),
+                  borderColor: _isRecording
+                      ? TruthLensColors.neonRose
+                      : TruthLensColors.borderPurple,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (isBaselinePhase) ...[
+                        const Text(
+                          'STAGE 1 — NEUTRAL BASELINE CALIBRATION',
+                          style: TextStyle(
+                            color: TruthLensColors.neonCyan,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        for (final q in widget.otaConfig.baselineQuestions.take(2))
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text(
+                              '• $q',
+                              style: const TextStyle(fontSize: 12.5, color: Colors.white),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                      ] else ...[
+                        TextField(
+                          controller: _questionCtrl,
+                          enabled: !_isRecording && _stage != ScanStage.analyzing,
+                          style: const TextStyle(fontSize: 13.5),
+                          decoration: const InputDecoration(
+                            labelText: 'Target Verification Question (Optional)',
+                            hintText: 'e.g., Kya aap kal raat office mein the?',
+                            prefixIcon: Icon(Icons.help_outline_rounded, size: 19),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                      if (_stage == ScanStage.analyzing)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.5,
+                                  color: TruthLensColors.neonCyan,
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              Text(
+                                'Running 21-Point AI Forensic Pipeline...',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: TruthLensColors.neonCyan,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        Row(
+                          children: [
+                            Expanded(
+                              child: NeonGradientButton(
+                                label: _isRecording
+                                    ? 'STOP & ${isBaselinePhase ? "SAVE BASELINE" : "ANALYZE"}'
+                                    : (isBaselinePhase
+                                        ? 'START 10s BASELINE'
+                                        : 'START TARGET SCAN'),
+                                icon: _isRecording
+                                    ? Icons.stop_circle_rounded
+                                    : Icons.fiber_manual_record_rounded,
+                                colors: _isRecording
+                                    ? const [TruthLensColors.neonRose, Color(0xFFEF4444)]
+                                    : const [TruthLensColors.neonPurple, TruthLensColors.neonCyan],
+                                onPressed: _isRecording ? _stopRecording : _startRecording,
+                              ),
+                            ),
+                            if (isBaselinePhase && !_isRecording) ...[
+                              const SizedBox(width: 8),
+                              TextButton(
+                                onPressed: () => setState(() => _stage = ScanStage.targetReady),
+                                child: const Text(
+                                  'Skip',
+                                  style: TextStyle(color: TruthLensColors.textMuted),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HudCircleButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  final bool active;
+
+  const _HudCircleButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.active = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(24),
+        child: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: active ? const Color(0xDD22D3EE) : const Color(0xBB060B1D),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: active ? Colors.white : TruthLensColors.borderCyan,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: active ? const Color(0xFF040712) : Colors.white,
+          ),
+        ),
+      ),
     );
   }
 }

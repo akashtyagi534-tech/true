@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="52%">
+      <stop offset="0%" stop-color="#1E1B4B"/>
+      <stop offset="65%" stop-color="#090D24"/>
+      <stop offset="100%" stop-color="#040712"/>
+    </radialGradient>
+    <linearGradient id="neonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A855F7"/>
+      <stop offset="50%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="irisGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="100%" stop-color="#A855F7"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bgGlow)"/>
+  <circle cx="256" cy="256" r="204" stroke="#22D3EE" stroke-opacity="0.35" stroke-width="6" stroke-dasharray="18 14"/>
+  <circle cx="256" cy="256" r="172" stroke="#A855F7" stroke-opacity="0.55" stroke-width="4" stroke-dasharray="48 16"/>
+  <path d="M74 256C122 162 186 124 256 124C326 124 390 162 438 256C390 350 326 388 256 388C186 388 122 350 74 256Z" stroke="url(#neonGrad)" stroke-width="16" stroke-linejoin="round"/>
+  <circle cx="256" cy="256" r="76" stroke="url(#irisGrad)" stroke-width="12" fill="#071026"/>
+  <circle cx="256" cy="256" r="34" fill="url(#irisGrad)"/>
+  <circle cx="272" cy="240" r="10" fill="#FFFFFF" fill-opacity="0.9"/>
+  <path d="M128 424L154 424L170 400L190 446L212 392L236 452L258 408L282 444L304 396L326 440L346 412L362 424L386 424" stroke="#22D3EE" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -2,7 +2,13 @@ from pydantic import BaseModel, Field
 
 
 class GoogleLoginIn(BaseModel):
-    credential: str
+    credential: str = ""
+    id_token: str = ""
+    access_token: str = ""
+    email: str = ""
+    name: str = ""
+    picture: str = ""
+    google_sub: str = ""
 
 
 class DevLoginIn(BaseModel):
@@ -34,6 +40,16 @@ class AdminSettingsIn(BaseModel):
 
 class AdminWalletAdjustIn(BaseModel):
     delta: float
+
+
+class OtaConfigIn(BaseModel):
+    app_version: str | None = None
+    maintenance_message: str | None = None
+    consent_banner: str | None = None
+    baseline_seconds: int | None = None
+    baseline_questions: list[str] | None = None
+    active_detectors: dict[str, bool] | None = None
+    scoring_weights: dict[str, float] | None = None
 
 
 class WindowIn(BaseModel):

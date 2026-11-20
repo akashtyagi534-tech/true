@@ -1,10 +1,10 @@
 name: truth_verify_app
-description: Multimodal behavioral and acoustic signal verification mobile client.
-publish_to: "none"
-version: 1.0.2+3
+description: Truth Lens Pro — Forensic Behavioral Scanner, Hindi Voice Verdict, Google Wallet & OTA Engine.
+publish_to: 'none'
+version: 4.0.0+4
 
 environment:
-  sdk: ">=3.3.0 <4.0.0"
+  sdk: '>=3.4.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -13,11 +13,10 @@ dependencies:
   http: ^1.2.2
   path_provider: ^2.1.5
   permission_handler: ^11.3.1
-
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-  flutter_lints: ^4.0.0
+  flutter_tts: ^4.2.5
+  google_sign_in: ^6.2.2
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/app_logo.svg

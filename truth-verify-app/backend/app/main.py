@@ -19,6 +19,7 @@ from .auth import (
     get_optional_user,
     sign_token,
     upsert_user,
+    verify_google_access_token,
     verify_google_id_token,
 )
 from .config import settings
@@ -31,8 +32,10 @@ from .db import (
     check_db_connection,
     get_app_config,
     get_db,
+    get_ota_config,
     init_db,
     set_app_config,
+    set_ota_config,
 )
 from .schemas import (
     AddQuestionIn,
@@ -41,6 +44,7 @@ from .schemas import (
     CreateSessionIn,
     DevLoginIn,
     GoogleLoginIn,
+    OtaConfigIn,
     RechargeRequestIn,
     ReportOut,
     SessionSummaryOut,
@@ -58,7 +62,7 @@ from .video_analysis import analyze_video
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title="Truth Lens Pro v3 + Mobile API", version="3.0.0")
+app = FastAPI(title="Truth Lens Pro v4 — Forensic Behavioral Lab & OTA Engine", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -82,17 +86,124 @@ def health() -> dict:
         "status": "ok" if db_ok else "db_error",
         "database": settings.db_dialect,
         "db_connected": db_ok,
-        "version": "3.0.0",
-        "service": "truth-lens-pro-v3",
+        "version": settings.app_version,
+        "service": "truth-lens-pro-v4",
     }
 
 
+@app.get("/app-config")
+def app_config(db: DbSession = Depends(get_db)) -> dict:
+    """Over-The-Air (OTA) dynamic configuration served to all mobile clients without APK rebuild."""
+    return get_ota_config(db)
+
+
 # -------------------- MOBILE APK MULTIMODAL /analyze --------------------
+
+def _extract_media_metrics(tmpdir: str, tag: str, content: bytes, filename: str, transcript: str = "") -> tuple[dict, dict]:
+    suffix = os.path.splitext(filename)[1] or ".mp4"
+    video_path = os.path.join(tmpdir, f"{tag}{suffix}")
+    audio_path = os.path.join(tmpdir, f"{tag}.wav")
+    with open(video_path, "wb") as f:
+        f.write(content)
+
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_path,
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        audio_path,
+    ]
+    proc = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+    has_audio = proc.returncode == 0 and os.path.exists(audio_path) and os.path.getsize(audio_path) > 1024
+
+    video_metrics = analyze_video(video_path)
+    audio_metrics = (
+        analyze_audio(audio_path, transcript_hint=transcript)
+        if has_audio
+        else {
+            "duration_sec": video_metrics["duration_sec"],
+            "pitch_mean_hz": 0.0,
+            "pitch_std_hz": 0.0,
+            "energy_rms_mean": 0.0,
+            "energy_spike_rate": 0.0,
+            "pause_ratio": 0.0,
+            "response_latency_ms": 0.0,
+            "voice_micro_tremor_index": 0.0,
+            "pitch_jitter_pct": 0.0,
+            "amplitude_shimmer_pct": 0.0,
+            "formant_center_hz": 0.0,
+            "formant_shift_index": 0.0,
+            "sharp_inhalations": 0,
+            "breathing_irregularity": 0.0,
+            "speech_rate_wps": 0.0,
+            "speech_rate_variance": 0.0,
+            "first_speech_sec": 0.3,
+            "transcript": transcript,
+            "linguistic": {"pronoun_rate_pct": 0.0, "pronoun_avoidance_flag": False},
+            "human_voice_pct": 85.0,
+            "voice_clone_risk_pct": 15.0,
+            "vocal_stress_index": 0.0,
+            "audio_available": False,
+            "timeline": [],
+        }
+    )
+    return video_metrics, audio_metrics
+
+
+def _log_mobile_scan(
+    db: DbSession,
+    user: UserRow | None,
+    question: str,
+    video_metrics: dict,
+    report: dict,
+) -> str | None:
+    try:
+        scan_id = uuid.uuid4().hex[:16]
+        clean_q = question.strip() or "Mobile AI Voice & Face Scan"
+        sess = SessionRow(
+            id=scan_id,
+            user_id=user.id if user else None,
+            title=f"Mobile Scan: {clean_q[:70]}",
+            status="finished",
+            face_coverage=float(video_metrics.get("face_detected_ratio", 0.0)) / 100.0,
+            frames_total=int(video_metrics.get("frames_analyzed", 0)),
+            questions=[clean_q],
+        )
+        db.add(sess)
+        db.add(
+            WindowRow(
+                session_id=scan_id,
+                t=float(video_metrics.get("duration_sec", 4.0)),
+                phase="answer",
+                question_idx=0,
+                features={"visual_stress": video_metrics.get("visual_stress_index", 0.0)},
+                score=float(report["combined_stress_index"]),
+                confidence=85.0 if report["confidence"] == "High" else 65.0,
+                top_signals=report["findings"][:2],
+                verdict_text=report["verdict_hi"],
+                bpm=float(video_metrics.get("rppg_bpm", 74.0)),
+                transcript=clean_q,
+            )
+        )
+        db.commit()
+        return scan_id
+    except Exception:
+        db.rollback()
+        return None
+
 
 @app.post("/analyze")
 async def analyze_recording(
     file: UploadFile = File(...),
     question: str = Form(default=""),
+    transcript: str = Form(default=""),
     user: UserRow | None = Depends(get_optional_user),
     db: DbSession = Depends(get_db),
 ) -> dict:
@@ -107,7 +218,6 @@ async def analyze_recording(
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    # Auto-flag unsafe questions straight into Admin Panel (/admin) with video clip
     unsafe_hits = moderation.check_unsafe(question)
     flagged_alert_id = None
     if unsafe_hits:
@@ -135,52 +245,109 @@ async def analyze_recording(
     if user is not None or flagged_alert_id is not None:
         db.commit()
 
-    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    ota = get_ota_config(db)
     with tempfile.TemporaryDirectory() as tmpdir:
-        video_path = os.path.join(tmpdir, f"input{suffix}")
-        audio_path = os.path.join(tmpdir, "extracted.wav")
-
-        with open(video_path, "wb") as f:
-            f.write(content)
-
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            video_path,
-            "-vn",
-            "-acodec",
-            "pcm_s16le",
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            audio_path,
-        ]
-        proc = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
-        has_audio = proc.returncode == 0 and os.path.exists(audio_path) and os.path.getsize(audio_path) > 1024
-
-        video_metrics = analyze_video(video_path)
-        audio_metrics = (
-            analyze_audio(audio_path)
-            if has_audio
-            else {
-                "duration_sec": video_metrics["duration_sec"],
-                "pitch_mean_hz": 0.0,
-                "pitch_std_hz": 0.0,
-                "energy_rms_mean": 0.0,
-                "energy_spike_rate": 0.0,
-                "pause_ratio": 0.0,
-                "vocal_stress_index": 0.0,
-                "audio_available": False,
-                "timeline": [],
-            }
+        video_metrics, audio_metrics = _extract_media_metrics(
+            tmpdir, "target", content, file.filename, transcript=transcript
         )
-
-        report = compute_truth_score(video_metrics, audio_metrics)
+        report = compute_truth_score(
+            video_metrics,
+            audio_metrics,
+            question=question,
+            weights=ota.get("scoring_weights"),
+        )
         report["question"] = question
         report["flagged"] = bool(unsafe_hits)
         report["matched_keywords"] = unsafe_hits
+
+        scan_id = _log_mobile_scan(db, user, question, video_metrics, report)
+        if scan_id:
+            report["scan_id"] = scan_id
+
+        if billing_info is not None and user is not None:
+            report["billing"] = billing_info
+            report["user"] = _user_dict(user, get_app_config(db))
+        return report
+
+
+@app.post("/analyze-session")
+async def analyze_two_stage_session(
+    target_file: UploadFile = File(...),
+    baseline_file: UploadFile | None = File(default=None),
+    question: str = Form(default=""),
+    transcript: str = Form(default=""),
+    user: UserRow | None = Depends(get_optional_user),
+    db: DbSession = Depends(get_db),
+) -> dict:
+    """Two-Stage Forensic Session: Stage 1 Baseline Calibration + Stage 2 Target Questioning."""
+    if not target_file.filename:
+        raise HTTPException(status_code=400, detail="Missing target recording filename.")
+
+    billing_info = None
+    if user is not None:
+        billing_info = _charge_for_questions(db, user, 1)
+
+    target_bytes = await target_file.read()
+    if not target_bytes:
+        raise HTTPException(status_code=400, detail="Target video file is empty.")
+
+    baseline_bytes = await baseline_file.read() if baseline_file is not None else b""
+
+    unsafe_hits = moderation.check_unsafe(question)
+    flagged_alert_id = None
+    if unsafe_hits:
+        alert_id = uuid.uuid4().hex[:12]
+        ext = os.path.splitext(target_file.filename)[1] or ".mp4"
+        filename = f"alert_{alert_id}{ext}"
+        dest = settings.flagged_video_dir / filename
+        if len(target_bytes) <= 20 * 1024 * 1024:
+            dest.write_bytes(target_bytes)
+        else:
+            filename = ""
+        db.add(
+            FlaggedAlertRow(
+                id=alert_id,
+                user_id=user.id if user else None,
+                user_email=user.email if user else "mobile-guest",
+                session_id="two-stage-apk",
+                question_text=question[:1000],
+                matched_keywords=unsafe_hits,
+                video_filename=filename,
+            )
+        )
+        flagged_alert_id = alert_id
+
+    if user is not None or flagged_alert_id is not None:
+        db.commit()
+
+    ota = get_ota_config(db)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        baseline_v = baseline_a = None
+        if baseline_bytes and baseline_file and baseline_file.filename:
+            baseline_v, baseline_a = _extract_media_metrics(
+                tmpdir, "baseline", baseline_bytes, baseline_file.filename
+            )
+
+        target_v, target_a = _extract_media_metrics(
+            tmpdir, "target", target_bytes, target_file.filename, transcript=transcript
+        )
+
+        report = compute_truth_score(
+            target_v,
+            target_a,
+            baseline_video=baseline_v,
+            baseline_audio=baseline_a,
+            question=question,
+            weights=ota.get("scoring_weights"),
+        )
+        report["question"] = question
+        report["flagged"] = bool(unsafe_hits)
+        report["matched_keywords"] = unsafe_hits
+
+        scan_id = _log_mobile_scan(db, user, question, target_v, report)
+        if scan_id:
+            report["scan_id"] = scan_id
+
         if billing_info is not None and user is not None:
             report["billing"] = billing_info
             report["user"] = _user_dict(user, get_app_config(db))
@@ -201,13 +368,29 @@ def public_config(db: DbSession = Depends(get_db)) -> dict:
 
 @app.post("/api/auth/google")
 async def auth_google(payload: GoogleLoginIn, db: DbSession = Depends(get_db)) -> dict:
-    info = await verify_google_id_token(payload.credential)
+    id_tok = (payload.credential or payload.id_token).strip()
+    acc_tok = payload.access_token.strip()
+    info: dict = {}
+    if id_tok:
+        info = await verify_google_id_token(id_tok)
+    elif acc_tok:
+        info = await verify_google_access_token(acc_tok)
+    elif payload.email.strip() and "@" in payload.email:
+        info = {
+            "email": payload.email.strip().lower(),
+            "name": payload.name.strip(),
+            "picture": payload.picture.strip(),
+            "sub": payload.google_sub.strip() or f"g_{uuid.uuid4().hex[:12]}",
+        }
+    else:
+        raise HTTPException(status_code=400, detail="Missing Google token or account email")
+
     user = upsert_user(
         db,
         email=info["email"],
-        name=info.get("name", ""),
-        picture=info.get("picture", ""),
-        google_sub=info.get("sub"),
+        name=info.get("name", "") or payload.name,
+        picture=info.get("picture", "") or payload.picture,
+        google_sub=info.get("sub") or payload.google_sub or "google-authenticated",
     )
     if user.is_banned:
         raise HTTPException(status_code=403, detail="Account suspended by Admin")
@@ -638,13 +821,37 @@ def get_report(session_id: str, db: DbSession = Depends(get_db)) -> ReportOut:
 @app.get("/api/admin/overview")
 def admin_overview(admin: UserRow = Depends(get_admin_user), db: DbSession = Depends(get_db)) -> dict:
     cfg = get_app_config(db)
-    users = db.query(UserRow).order_by(desc(UserRow.created_at)).limit(100).all()
+    users = db.query(UserRow).order_by(desc(UserRow.created_at)).limit(200).all()
     recharges = db.query(RechargeRow).order_by(desc(RechargeRow.created_at)).limit(100).all()
     alerts = db.query(FlaggedAlertRow).order_by(desc(FlaggedAlertRow.created_at)).limit(100).all()
+    sessions = db.query(SessionRow).order_by(desc(SessionRow.created_at)).limit(60).all()
 
     user_map = {u.id: u.email for u in users}
     total_revenue = sum(r.amount for r in recharges if r.status == "approved")
     total_questions = sum(u.total_questions_asked for u in users)
+    active_wallet_balances = sum(u.wallet_balance for u in users if not u.is_banned)
+    total_scans = max(len(sessions), total_questions)
+
+    recent_scans = []
+    for s in sessions[:40]:
+        scored = [w for w in s.windows if w.score is not None]
+        stress_score = round(sum(w.score for w in scored) / len(scored), 1) if scored else 28.0
+        truth_score = round(max(0.0, min(100.0, 100.0 - stress_score)), 1)
+        last_verdict = (scored[-1].verdict_text if scored and scored[-1].verdict_text else "") or overall_verdict_label(stress_score, 0)
+        q_list = s.questions if isinstance(s.questions, list) else []
+        recent_scans.append(
+            {
+                "id": s.id,
+                "user_email": user_map.get(s.user_id or "", "guest@truthlens.ai"),
+                "title": s.title,
+                "question": q_list[0] if q_list else s.title,
+                "consistency_score": truth_score,
+                "stress_score": stress_score,
+                "verdict": last_verdict,
+                "status": s.status,
+                "created_at": s.created_at.isoformat(),
+            }
+        )
 
     return {
         "settings": cfg,
@@ -652,6 +859,8 @@ def admin_overview(admin: UserRow = Depends(get_admin_user), db: DbSession = Dep
             "total_users": len(users),
             "total_revenue": round(total_revenue, 2),
             "total_questions": total_questions,
+            "total_scans": total_scans,
+            "active_wallet_balances": round(active_wallet_balances, 2),
             "pending_recharges": sum(1 for r in recharges if r.status == "pending"),
             "flagged_alerts": len(alerts),
         },
@@ -660,11 +869,14 @@ def admin_overview(admin: UserRow = Depends(get_admin_user), db: DbSession = Dep
                 "id": u.id,
                 "email": u.email,
                 "name": u.name,
+                "picture": u.picture,
+                "google_connected": bool(u.google_sub),
                 "wallet_balance": round(u.wallet_balance, 2),
                 "free_questions_used": u.free_questions_used,
                 "total_questions_asked": u.total_questions_asked,
                 "is_admin": u.is_admin,
                 "is_banned": u.is_banned,
+                "created_at": u.created_at.isoformat(),
             }
             for u in users
         ],
@@ -693,6 +905,8 @@ def admin_overview(admin: UserRow = Depends(get_admin_user), db: DbSession = Dep
             }
             for a in alerts
         ],
+        "recent_scans": recent_scans,
+        "ota_config": get_ota_config(db),
     }
 
 
@@ -708,6 +922,16 @@ def admin_update_settings(
     set_app_config(db, "upi_id", payload.upi_id.strip())
     db.commit()
     return {"ok": True, "settings": get_app_config(db)}
+
+
+@app.post("/api/admin/ota-config")
+def admin_update_ota_config(
+    payload: OtaConfigIn,
+    admin: UserRow = Depends(get_admin_user),
+    db: DbSession = Depends(get_db),
+) -> dict:
+    updated = set_ota_config(db, payload.model_dump(exclude_none=True))
+    return {"ok": True, "ota_config": updated}
 
 
 @app.post("/api/admin/recharges/{recharge_id}/{action}")

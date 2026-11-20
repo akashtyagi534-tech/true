@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import (
@@ -41,7 +42,7 @@ class AppSetting(Base):
     __tablename__ = "app_settings"
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    value: Mapped[str] = mapped_column(String(256))
+    value: Mapped[str] = mapped_column(Text)
 
 
 class UserRow(Base):
@@ -149,6 +150,87 @@ def set_app_config(db, key: str, value: str) -> None:
         db.add(AppSetting(key=key, value=str(value)))
     else:
         row.value = str(value)
+
+
+DEFAULT_OTA_BASELINE_QUESTIONS = [
+    "Aapka poora naam kya hai aur aaj kaunsi tareekh hai?",
+    "Aaj subah aapne nashte mein kya khaya tha?",
+    "Aap abhi kis shehar aur kamre mein baithe hain?",
+]
+
+DEFAULT_ACTIVE_DETECTORS = {
+    "ocular_micro_expressions": True,
+    "rppg_heart_rate": True,
+    "kinesic_pose_hands": True,
+    "bio_acoustic_tremor": True,
+    "deepfake_liveness": True,
+    "voice_clone_check": True,
+    "ai_interrogation_coach": True,
+    "hindi_voice_tts": True,
+}
+
+DEFAULT_SCORING_WEIGHTS = {
+    "visual": 0.45,
+    "acoustic": 0.45,
+    "cognitive": 0.10,
+}
+
+
+def get_ota_config(db) -> dict:
+    pricing = get_app_config(db)
+    raw_map = {r.key: r.value for r in db.query(AppSetting).all()}
+
+    def _parse_json(key: str, fallback):
+        raw = raw_map.get(key)
+        if not raw:
+            return fallback
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, type(fallback)) else fallback
+        except Exception:
+            return fallback
+
+    return {
+        "app_version": raw_map.get("ota_app_version") or settings.app_version,
+        "maintenance_message": raw_map.get("ota_maintenance_message", settings.maintenance_message),
+        "consent_banner": raw_map.get(
+            "ota_consent_banner",
+            "CONSENT-BASED SCANNER: Visible camera & mic active. Non-legal behavioral stress analysis.",
+        ),
+        "baseline_seconds": int(float(raw_map.get("ota_baseline_seconds", settings.baseline_seconds))),
+        "baseline_questions": _parse_json("ota_baseline_questions", DEFAULT_OTA_BASELINE_QUESTIONS),
+        "active_detectors": {
+            **DEFAULT_ACTIVE_DETECTORS,
+            **_parse_json("ota_active_detectors", {}),
+        },
+        "scoring_weights": {
+            **DEFAULT_SCORING_WEIGHTS,
+            **_parse_json("ota_scoring_weights", {}),
+        },
+        "pricing": pricing,
+        "google_client_id": settings.google_client_id,
+    }
+
+
+def set_ota_config(db, data: dict) -> dict:
+    if "app_version" in data and data["app_version"] is not None:
+        set_app_config(db, "ota_app_version", str(data["app_version"]).strip() or settings.app_version)
+    if "maintenance_message" in data and data["maintenance_message"] is not None:
+        set_app_config(db, "ota_maintenance_message", str(data["maintenance_message"]).strip())
+    if "consent_banner" in data and data["consent_banner"] is not None:
+        set_app_config(db, "ota_consent_banner", str(data["consent_banner"]).strip())
+    if "baseline_seconds" in data and data["baseline_seconds"] is not None:
+        set_app_config(db, "ota_baseline_seconds", str(max(5, min(20, int(data["baseline_seconds"])))))
+    if "baseline_questions" in data and isinstance(data["baseline_questions"], list):
+        clean_qs = [str(q).strip() for q in data["baseline_questions"] if str(q).strip()]
+        if clean_qs:
+            set_app_config(db, "ota_baseline_questions", json.dumps(clean_qs[:6]))
+    if "active_detectors" in data and isinstance(data["active_detectors"], dict):
+        set_app_config(db, "ota_active_detectors", json.dumps(data["active_detectors"]))
+    if "scoring_weights" in data and isinstance(data["scoring_weights"], dict):
+        set_app_config(db, "ota_scoring_weights", json.dumps(data["scoring_weights"]))
+    db.commit()
+    return get_ota_config(db)
 
 
 def init_db() -> None:

@@ -1,11 +1,12 @@
 FROM python:3.11-slim
 
-# System packages for OpenCV, librosa, and ffmpeg audio extraction
+# System packages for OpenCV, librosa, ffmpeg audio extraction, and optional Faster-Whisper
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
     libsndfile1 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

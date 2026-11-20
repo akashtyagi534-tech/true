@@ -1,14 +1,18 @@
 import {useCallback, useEffect, useState} from 'react';
 import {
+  Activity,
   AlertTriangle,
   Ban,
   Check,
   CheckCircle2,
+  CloudUpload,
   ExternalLink,
   IndianRupee,
   LogOut,
+  Minus,
   Plus,
   RefreshCw,
+  Search,
   Shield,
   SlidersHorizontal,
   Users,
@@ -37,6 +41,8 @@ interface AdminStats {
   total_users: number;
   total_revenue: number;
   total_questions: number;
+  total_scans?: number;
+  active_wallet_balances?: number;
   pending_recharges: number;
   flagged_alerts: number;
 }
@@ -45,6 +51,7 @@ interface AdminUser {
   id: string;
   email: string;
   name: string;
+  google_connected?: boolean;
   wallet_balance: number;
   free_questions_used: number;
   total_questions_asked: number;
@@ -73,18 +80,36 @@ interface AdminAlert {
   created_at: string;
 }
 
+interface AdminScan {
+  id: string;
+  user_email: string;
+  title: string;
+  question: string;
+  consistency_score: number;
+  verdict: string;
+  created_at: string;
+}
+
+interface AdminOtaConfig {
+  app_version?: string;
+  maintenance_message?: string;
+  baseline_questions?: string[];
+}
+
 interface AdminOverview {
   settings: AdminSettings;
   stats: AdminStats;
   users: AdminUser[];
   recharges: AdminRecharge[];
   alerts: AdminAlert[];
+  recent_scans?: AdminScan[];
+  ota_config?: AdminOtaConfig;
 }
 
 const TOKEN_STORAGE_KEY = 'truthlens_admin_jwt';
 const EMAIL_STORAGE_KEY = 'truthlens_admin_email';
 
-type AdminSubTab = 'overview' | 'recharges' | 'users' | 'alerts';
+type AdminSubTab = 'overview' | 'recharges' | 'users' | 'scans' | 'alerts';
 
 export function AdminPanelView({
   railwayUrl,
@@ -117,11 +142,17 @@ export function AdminPanelView({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // Editable pricing form state
+  // Editable pricing & OTA form state
   const [pricePerQ, setPricePerQ] = useState('10');
   const [minRecharge, setMinRecharge] = useState('50');
   const [freeQuestions, setFreeQuestions] = useState('3');
-  const [upiId, setUpiId] = useState('yourupi@oksbi');
+  const [upiId, setUpiId] = useState('akashtyagi534@oksbi');
+  const [otaVersion, setOtaVersion] = useState('4.0.0');
+  const [otaMaint, setOtaMaint] = useState('');
+  const [otaQuestions, setOtaQuestions] = useState('');
+  const [savingOta, setSavingOta] = useState(false);
+  const [userSearch, setUserSearch] = useState('');
+  const [customWalletDelta, setCustomWalletDelta] = useState('50');
 
   const cleanBaseUrl = railwayUrl.trim().replace(/\/+$/, '');
 
@@ -175,6 +206,9 @@ export function AdminPanelView({
         setMinRecharge(String(data.settings.min_recharge));
         setFreeQuestions(String(data.settings.free_questions));
         setUpiId(data.settings.upi_id);
+        setOtaVersion(data.ota_config?.app_version || '4.0.0');
+        setOtaMaint(data.ota_config?.maintenance_message || '');
+        setOtaQuestions((data.ota_config?.baseline_questions || []).join('\n'));
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : 'Failed to load admin overview.');
       } finally {
@@ -269,6 +303,36 @@ export function AdminPanelView({
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save settings.');
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const handleSaveOta = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingOta(true);
+    setErrorMsg(null);
+    try {
+      const qs = otaQuestions
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await callProxy('/api/admin/ota-config', {
+        method: 'POST',
+        body: {
+          app_version: otaVersion.trim() || '4.0.0',
+          maintenance_message: otaMaint.trim(),
+          baseline_questions: qs,
+        },
+      });
+      await loadOverview();
+      showToast(
+        language === 'hi'
+          ? 'OTA Config live push ho gaya — bina APK rebuild kiye sabhi phones update honge!'
+          : 'OTA configuration pushed live to all installed APKs!',
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to update OTA config.');
+    } finally {
+      setSavingOta(false);
     }
   };
 
@@ -547,14 +611,8 @@ export function AdminPanelView({
       ) : (
         /* Live Connected Admin Dashboard */
         <div className="space-y-6">
-          {/* 5 KPI Cards */}
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-xs font-medium text-slate-500">Total Revenue</p>
-              <p className="mt-1.5 font-display text-2xl font-semibold text-emerald-700 tabular-nums">
-                ₹{overview.stats.total_revenue.toLocaleString('en-IN')}
-              </p>
-            </div>
+          {/* 6 KPI Cards */}
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
             <div className="rounded-xl border border-slate-200 bg-white p-4">
               <p className="text-xs font-medium text-slate-500">Total Users</p>
               <p className="mt-1.5 font-display text-2xl font-semibold text-slate-950 tabular-nums">
@@ -562,9 +620,21 @@ export function AdminPanelView({
               </p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-xs font-medium text-slate-500">Questions Asked</p>
-              <p className="mt-1.5 font-display text-2xl font-semibold text-slate-950 tabular-nums">
-                {overview.stats.total_questions}
+              <p className="text-xs font-medium text-slate-500">Total Scans</p>
+              <p className="mt-1.5 font-display text-2xl font-semibold text-indigo-700 tabular-nums">
+                {overview.stats.total_scans ?? overview.stats.total_questions}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <p className="text-xs font-medium text-slate-500">Total Revenue</p>
+              <p className="mt-1.5 font-display text-2xl font-semibold text-emerald-700 tabular-nums">
+                ₹{overview.stats.total_revenue.toLocaleString('en-IN')}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <p className="text-xs font-medium text-slate-500">Active Wallets</p>
+              <p className="mt-1.5 font-display text-2xl font-semibold text-cyan-700 tabular-nums">
+                ₹{(overview.stats.active_wallet_balances ?? 0).toLocaleString('en-IN')}
               </p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -584,13 +654,18 @@ export function AdminPanelView({
           {/* Sub-navigation */}
           <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3">
             {[
-              {id: 'overview' as const, label: 'Pricing & UPI', icon: SlidersHorizontal},
+              {id: 'overview' as const, label: 'Pricing, UPI & OTA', icon: SlidersHorizontal},
               {
                 id: 'recharges' as const,
                 label: `UPI Recharges (${overview.stats.pending_recharges})`,
                 icon: IndianRupee,
               },
               {id: 'users' as const, label: `Users (${overview.users.length})`, icon: Users},
+              {
+                id: 'scans' as const,
+                label: `Recent Scans (${(overview.recent_scans ?? []).length})`,
+                icon: Activity,
+              },
               {id: 'alerts' as const, label: `Flagged Videos (${overview.alerts.length})`, icon: Video},
             ].map((tab) => {
               const Icon = tab.icon;
@@ -613,78 +688,138 @@ export function AdminPanelView({
             })}
           </div>
 
-          {/* Tab 1: Live Pricing & UPI */}
+          {/* Tab 1: Live Pricing, UPI & OTA */}
           {activeTab === 'overview' && (
-            <form onSubmit={handleSaveSettings} className="max-w-2xl rounded-xl border border-slate-200 bg-white p-6">
-              <h2 className="font-display text-lg font-semibold text-slate-950">
-                Live Pricing & UPI Controls
-              </h2>
-              <p className="mt-1 text-xs text-slate-600">
-                Changes apply immediately to both the Web app and Android APK.
-              </p>
-              <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label htmlFor="cfg-price" className="block text-xs font-medium text-slate-700">
-                    Price Per Question (₹)
-                  </label>
-                  <input
-                    id="cfg-price"
-                    type="number"
-                    min={0}
-                    value={pricePerQ}
-                    onChange={(e) => setPricePerQ(e.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
-                  />
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <form onSubmit={handleSaveSettings} className="rounded-xl border border-slate-200 bg-white p-6">
+                <h2 className="font-display text-lg font-semibold text-slate-950">
+                  Live Pricing & UPI Controls
+                </h2>
+                <p className="mt-1 text-xs text-slate-600">
+                  Changes apply immediately to both the Web app and Android APK.
+                </p>
+                <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="cfg-price" className="block text-xs font-medium text-slate-700">
+                      Price Per Question (₹)
+                    </label>
+                    <input
+                      id="cfg-price"
+                      type="number"
+                      min={0}
+                      value={pricePerQ}
+                      onChange={(e) => setPricePerQ(e.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="cfg-min" className="block text-xs font-medium text-slate-700">
+                      Minimum Recharge (₹)
+                    </label>
+                    <input
+                      id="cfg-min"
+                      type="number"
+                      min={1}
+                      value={minRecharge}
+                      onChange={(e) => setMinRecharge(e.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="cfg-free" className="block text-xs font-medium text-slate-700">
+                      Free Questions Per New User
+                    </label>
+                    <input
+                      id="cfg-free"
+                      type="number"
+                      min={0}
+                      value={freeQuestions}
+                      onChange={(e) => setFreeQuestions(e.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="cfg-upi" className="block text-xs font-medium text-slate-700">
+                      Your UPI ID
+                    </label>
+                    <input
+                      id="cfg-upi"
+                      type="text"
+                      value={upiId}
+                      onChange={(e) => setUpiId(e.target.value)}
+                      placeholder="yourname@oksbi"
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor="cfg-min" className="block text-xs font-medium text-slate-700">
-                    Minimum Recharge (₹)
-                  </label>
-                  <input
-                    id="cfg-min"
-                    type="number"
-                    min={1}
-                    value={minRecharge}
-                    onChange={(e) => setMinRecharge(e.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
-                  />
+                <button
+                  type="submit"
+                  disabled={savingSettings}
+                  className="mt-5 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+                >
+                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>{savingSettings ? 'Saving...' : 'Save Live Settings'}</span>
+                </button>
+              </form>
+
+              <form onSubmit={handleSaveOta} className="rounded-xl border border-slate-200 bg-white p-6">
+                <h2 className="font-display text-lg font-semibold text-slate-950">
+                  Over-The-Air (OTA) App Config
+                </h2>
+                <p className="mt-1 text-xs text-slate-600">
+                  Pushes instantly to all installed Android APKs via <code>GET /app-config</code> — no APK rebuild required.
+                </p>
+                <div className="mt-5 space-y-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="ota-ver" className="block text-xs font-medium text-slate-700">
+                        Live App Version
+                      </label>
+                      <input
+                        id="ota-ver"
+                        type="text"
+                        value={otaVersion}
+                        onChange={(e) => setOtaVersion(e.target.value)}
+                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="ota-maint" className="block text-xs font-medium text-slate-700">
+                        Notice / Maintenance Banner
+                      </label>
+                      <input
+                        id="ota-maint"
+                        type="text"
+                        value={otaMaint}
+                        onChange={(e) => setOtaMaint(e.target.value)}
+                        placeholder="Optional announcement"
+                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 text-xs text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="ota-qs" className="block text-xs font-medium text-slate-700">
+                      Stage-1 Baseline Calibration Questions (one per line)
+                    </label>
+                    <textarea
+                      id="ota-qs"
+                      rows={3}
+                      value={otaQuestions}
+                      onChange={(e) => setOtaQuestions(e.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 text-xs text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor="cfg-free" className="block text-xs font-medium text-slate-700">
-                    Free Questions Per New User
-                  </label>
-                  <input
-                    id="cfg-free"
-                    type="number"
-                    min={0}
-                    value={freeQuestions}
-                    onChange={(e) => setFreeQuestions(e.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="cfg-upi" className="block text-xs font-medium text-slate-700">
-                    Your UPI ID
-                  </label>
-                  <input
-                    id="cfg-upi"
-                    type="text"
-                    value={upiId}
-                    onChange={(e) => setUpiId(e.target.value)}
-                    placeholder="yourname@oksbi"
-                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none"
-                  />
-                </div>
-              </div>
-              <button
-                type="submit"
-                disabled={savingSettings}
-                className="mt-5 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-60"
-              >
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>{savingSettings ? 'Saving...' : 'Save Live Settings'}</span>
-              </button>
-            </form>
+                <button
+                  type="submit"
+                  disabled={savingOta}
+                  className="mt-5 inline-flex items-center gap-2 rounded-lg bg-indigo-700 px-5 py-2.5 text-xs font-medium text-white hover:bg-indigo-800 disabled:opacity-60"
+                >
+                  <CloudUpload className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>{savingOta ? 'Pushing...' : 'Push OTA Config Live'}</span>
+                </button>
+              </form>
+            </div>
           )}
 
           {/* Tab 2: Recharges */}
@@ -765,6 +900,28 @@ export function AdminPanelView({
           {/* Tab 3: Users */}
           {activeTab === 'users' && (
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="relative w-full max-w-xs">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                  <input
+                    type="search"
+                    value={userSearch}
+                    onChange={(e) => setUserSearch(e.target.value)}
+                    placeholder="Search user email or name..."
+                    className="w-full rounded-lg border border-slate-300 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-900 focus:border-blue-700 focus:outline-none"
+                  />
+                </div>
+                <div className="flex items-center gap-2 text-xs text-slate-600">
+                  <span>Manual Amount (₹):</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={customWalletDelta}
+                    onChange={(e) => setCustomWalletDelta(e.target.value)}
+                    className="w-20 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-blue-700 focus:outline-none"
+                  />
+                </div>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
@@ -777,57 +934,137 @@ export function AdminPanelView({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {overview.users.map((u) => (
-                      <tr key={u.id}>
-                        <td className="px-4 py-3">
-                          <p className="font-medium text-slate-900">{u.name || u.email}</p>
-                          <p className="font-mono text-xs text-slate-500">{u.email}</p>
-                        </td>
-                        <td className="px-4 py-3 font-mono font-medium text-emerald-700 tabular-nums">
-                          ₹{u.wallet_balance.toFixed(0)}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-xs text-slate-600 tabular-nums">
-                          {u.total_questions_asked} (Free used: {u.free_questions_used})
-                        </td>
-                        <td className="px-4 py-3">
-                          {u.is_banned ? (
-                            <span className="rounded bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700">
-                              Banned
-                            </span>
-                          ) : u.is_admin ? (
-                            <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
-                              Admin
-                            </span>
-                          ) : (
-                            <span className="rounded bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                              Active
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="inline-flex items-center gap-2">
-                            <button
-                              type="button"
-                              disabled={actionBusyId === `${u.id}:50`}
-                              onClick={() => void handleAdjustWallet(u.id, 50)}
-                              className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                            >
-                              <Plus className="h-3 w-3" aria-hidden="true" />
-                              <span>₹50</span>
-                            </button>
-                            <button
-                              type="button"
-                              disabled={actionBusyId === `ban:${u.id}`}
-                              onClick={() => void handleToggleBan(u.id)}
-                              className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-50"
-                            >
-                              <Ban className="h-3 w-3" aria-hidden="true" />
-                              <span>{u.is_banned ? 'Unban' : 'Ban'}</span>
-                            </button>
-                          </div>
+                    {overview.users
+                      .filter((u) => {
+                        const q = userSearch.trim().toLowerCase();
+                        return (
+                          !q ||
+                          u.email.toLowerCase().includes(q) ||
+                          (u.name || '').toLowerCase().includes(q)
+                        );
+                      })
+                      .map((u) => {
+                        const deltaAmt = Math.max(1, Number(customWalletDelta) || 50);
+                        return (
+                          <tr key={u.id}>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <p className="font-medium text-slate-900">{u.name || u.email}</p>
+                                {u.google_connected && (
+                                  <span className="rounded bg-cyan-50 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-700">
+                                    Google
+                                  </span>
+                                )}
+                              </div>
+                              <p className="font-mono text-xs text-slate-500">{u.email}</p>
+                            </td>
+                            <td className="px-4 py-3 font-mono font-medium text-emerald-700 tabular-nums">
+                              ₹{u.wallet_balance.toFixed(0)}
+                            </td>
+                            <td className="px-4 py-3 font-mono text-xs text-slate-600 tabular-nums">
+                              {u.total_questions_asked} (Free used: {u.free_questions_used})
+                            </td>
+                            <td className="px-4 py-3">
+                              {u.is_banned ? (
+                                <span className="rounded bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700">
+                                  Blocked
+                                </span>
+                              ) : u.is_admin ? (
+                                <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                                  Admin
+                                </span>
+                              ) : (
+                                <span className="rounded bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                                  Active
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={actionBusyId === `${u.id}:${deltaAmt}`}
+                                  onClick={() => void handleAdjustWallet(u.id, deltaAmt)}
+                                  className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                                >
+                                  <Plus className="h-3 w-3" aria-hidden="true" />
+                                  <span>₹{deltaAmt}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={actionBusyId === `${u.id}:${-deltaAmt}`}
+                                  onClick={() => void handleAdjustWallet(u.id, -deltaAmt)}
+                                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                >
+                                  <Minus className="h-3 w-3" aria-hidden="true" />
+                                  <span>₹{deltaAmt}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={actionBusyId === `ban:${u.id}`}
+                                  onClick={() => void handleToggleBan(u.id)}
+                                  className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                                >
+                                  <Ban className="h-3 w-3" aria-hidden="true" />
+                                  <span>{u.is_banned ? 'Unblock' : 'Block'}</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Tab 4: Recent Scans */}
+          {activeTab === 'scans' && (
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
+                    <tr>
+                      <th className="px-4 py-3">User</th>
+                      <th className="px-4 py-3">Question</th>
+                      <th className="px-4 py-3">Score</th>
+                      <th className="px-4 py-3">Verdict</th>
+                      <th className="px-4 py-3 text-right">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {(overview.recent_scans ?? []).length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-8 text-center text-xs text-slate-500">
+                          Abhi koi recent scan record nahi hua hai.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      (overview.recent_scans ?? []).map((s) => (
+                        <tr key={s.id}>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-600">{s.user_email}</td>
+                          <td className="px-4 py-3 font-medium text-slate-900">{s.question || s.title}</td>
+                          <td className="px-4 py-3">
+                            <span
+                              className={`inline-flex rounded px-2 py-0.5 font-mono text-xs font-semibold ${
+                                s.consistency_score >= 70
+                                  ? 'bg-emerald-50 text-emerald-700'
+                                  : s.consistency_score >= 45
+                                    ? 'bg-amber-50 text-amber-700'
+                                    : 'bg-rose-50 text-rose-700'
+                              }`}
+                            >
+                              {s.consistency_score}%
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-600 max-w-md">{s.verdict}</td>
+                          <td className="px-4 py-3 text-right font-mono text-[11px] text-slate-400">
+                            {new Date(s.created_at).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
